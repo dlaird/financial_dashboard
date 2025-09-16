@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+dist/
+build/
+*.log
+*.pyc
+
+# Streamlit
+.streamlit/config.toml
+.streamlit/secrets.toml
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+*.sqlite3
+
+# Jupyter (if used)
+.ipynb_checkpoints/
+
+# Cache
+.cache/
+python scratch notebook.ipynb
+
+# Data
+ynab_extract.csv
+ynab_extract.xlsx
+
