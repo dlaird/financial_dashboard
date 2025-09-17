@@ -30,6 +30,7 @@ Thumbs.db
 # Cache
 .cache/
 python scratch notebook.ipynb
+scratch notebook.ipynb
 
 # Data
 ynab_extract.csv
