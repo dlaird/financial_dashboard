@@ -75,8 +75,6 @@ def make_chart(df, chart_type, x, y, color, title, cumulative=False, force_year_
                         dtick=1
                     )
                 )
-
-
     return fig
 
 def render_chart_pair(title, chart1=None, chart2=None, key_prefix=None, charts=None):
