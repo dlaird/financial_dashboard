@@ -1,5 +1,7 @@
 import pandas as pd
 import plotly.express as px
+import numpy as np
+import streamlit as st
 
 def sort_and_cast(df, group_col, time_col, ascending_order=True):
     """
@@ -61,13 +63,36 @@ def make_chart(df, chart_type, x, y, color, title, cumulative=False, force_year_
     if cumulative and chart_type == "bar":
         fig.update_traces(marker_line_width=0)
 
-    if force_year_ticks and df[x].dtype in ["int64", "int32"]:
-        fig.update_layout(
-            xaxis=dict(
-                tickmode="linear",
-                tick0=int(df[x].min()),
-                dtick=1
-            )
-        )
+    if force_year_ticks and x in df.columns:
+        x_series = df[x]
+        if pd.api.types.is_integer_dtype(x_series) and not x_series.isna().all():
+            tick_start = x_series.min()
+            if not np.isnan(tick_start):
+                fig.update_layout(
+                    xaxis=dict(
+                        tickmode="linear",
+                        tick0=int(tick_start),
+                        dtick=1
+                    )
+                )
+
 
     return fig
+
+def render_chart_pair(title, chart1=None, chart2=None, key_prefix=None, charts=None):
+    if chart1 and chart2:
+        c1, c2 = chart1, chart2
+    elif key_prefix and charts:
+        c1 = charts[f"{key_prefix}_line"]
+        c2 = charts[f"{key_prefix}_bar"]
+    else:
+        raise ValueError("Must provide either chart1/chart2 or key_prefix/charts")
+
+    st.subheader(title)
+    with st.container():
+        col1, col2 = st.columns(2)
+        with col1:
+            st.plotly_chart(c1, use_container_width=True)
+        with col2:
+            st.plotly_chart(c2, use_container_width=True)
+        st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
