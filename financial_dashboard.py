@@ -65,7 +65,7 @@ for spec in chart_specs:
         )
 
 ### annotations, should be made modular
-charts["living_expenses_group_line"].add_hline(
+charts["living_expenses_group_bar"].add_hline(
     y=8000,  # Replace with your desired y-axis value
     line_dash="solid",  # Optional: dashed line style
     line_color="black",  # Optional: line color
@@ -78,10 +78,26 @@ charts["living_expenses_group_line"].add_hline(
 )
 
 ### dashboard
+### data bits to add to heading
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+import socket
+hostname = socket.gethostname()
+ip_address = socket.gethostbyname(hostname)
+port = 8501  # default Streamlit port
+
+
 st.set_page_config(layout="wide")
 
 with st.container():
     st.title("Spending Dashboard")
+    st.markdown(f"**Dashboard generated:** {timestamp}")
+    st.markdown(f"""
+    **Host:** `{hostname}`  
+    **IP Address:** `{ip_address}`  
+    **Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
+    """)
     st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
 
 dh.render_chart_pair("Expense Category Super Groups (Yearly)", key_prefix="category_supergroups_yearly", charts=charts)
