@@ -45,11 +45,11 @@ def get_ynab_data():
     for group in category_groups:
         group_name = group['name']
         for cat in group['categories']:
-            if not cat['hidden']:
-                categories_flat.append({
-                    "category_id": cat["id"],
-                    "category_name": cat["name"],
-                    "category_group": group_name
+            categories_flat.append({
+                "category_id": cat["id"],
+                "category_name": cat["name"],
+                "category_group": group_name,
+                "hidden": cat.get("hidden", False)
                 })
 
     df_cat = pd.DataFrame(categories_flat)
@@ -57,7 +57,7 @@ def get_ynab_data():
     # --- Join on category_id (more reliable than name) ---
     df_tx_enriched = df_tx.merge(df_cat, on="category_id", how="left")
     # reorder columns
-    df = df_tx_enriched[['date', 'payee_name', 'memo', 'category_group','category_name', 'amount', 'import_payee_name','import_payee_name_original', 'category_id', 'cleared','approved', 'account_name']]
+    df = df_tx_enriched[['date', 'payee_name', 'memo', 'category_group','category_name', 'amount', 'import_payee_name','import_payee_name_original', 'category_id', 'cleared','approved', 'account_name', 'hidden']] 
     # data mods
     df = df.convert_dtypes()
     df['amount'] = df['amount'] / 1000  # Convert from milliunits
@@ -74,6 +74,35 @@ def get_ynab_data():
             "Other"
         )
     )
+
+    # remove not-needed transactions 
+    # maybe should happen above to avoid running above logic unnecessarily
+    # remove transfers between accounts
+    # df = df[~df["payee_name"].str.startswith("Transfer :",na=False)].copy()
+
+    # go ahead and remove records from hidden categories until more time to investigate them
+    df = df[df["hidden"] != True].copy()
+    # df = df[not df["hidden"]].copy()
+    
+    # remove records from irrelevant accounts
+    excluded_accounts = [
+        '17008 WTR HELOC',
+        'CapOne Education Savings',
+        'CapOne LTC Savings',
+        'CapOne Pet Savings',
+        'CapOne Savings',
+        'CapOne Special for M',
+        'CapOne Taxes Savings',
+        'Capital One REI MasterCard',
+        "Chris's Checking - 8664",
+        "Chris's Gifts",
+        "Chris's Savings",
+        'Say Hello USA',
+        # "Sophie's Checking - 0991",
+        "Sophie's Visa",
+        'Vanguard Education Savings'
+    ]
+    df = df[~df["account_name"].isin(excluded_accounts)].copy()
 
     # set earliest date
     EarliestDate = pd.to_datetime('1/1/2018')

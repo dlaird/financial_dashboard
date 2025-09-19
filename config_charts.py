@@ -46,6 +46,20 @@ chart_specs = [
         "force_year_ticks": [True, False]
     },
     {
+        "name": "basic_expenses_housing",
+        "df_name": "df_cat_yearly",
+        "filter_col": "category_group",
+        "filter": {"values": ["Basic Expenses - Housing"]},
+        "color_col": "category_name",
+        "time_col": "year",
+        "chart_type": ["line", "bar"],
+        "title": [
+            "Basic Expenses - Housing Group by Category",
+            "Basic Expenses - Housing Group by Category, Cumulative"
+        ],
+        "force_year_ticks": [True, False]
+    },
+    {
         "name": "basic_expenses_rental_home",
         "df_name": "df_cat_yearly",
         "filter_col": "category_group",
@@ -89,13 +103,27 @@ chart_specs = [
         "force_year_ticks": [True, False]
     },
     {
+        "name": "goal_chris_on_payroll",
+        "df_name": "df_cat_monthly",
+        "filter_col": "category_group",
+        "filter": {"values": ["Goal - Chris on Payroll"]},
+        "color_col": "category_name",
+        "time_col": "month_start",
+        "chart_type": ["line", "bar"],
+        "title": [
+            "Goal - Chris on Payroll Group by Category",
+            "Goal - Chris on Payroll Group by Category, Cumulative"
+        ],
+        "force_year_ticks": [True, False]
+    },
+    {
         "name": "goal_travel",
         "df_name": "df_cat_yearly",
         "filter_col": "category_group",
         "filter": {"values": ["Goal - Travel"]},
         "color_col": "category_name",
         "time_col": "year",
-        "chart_type": ["line", "area"],
+        "chart_type": ["line", "bar"],
         "title": [
             "Goal - Travel Group by Category",
             "Goal - Travel Group by Category, Cumulative"
@@ -113,6 +141,20 @@ chart_specs = [
         "title": [
             "Goal - Children (Non-Academic) Group by Category",
             "Goal - Children (Non-Academic) Group by Category, Cumulative"
+        ],
+        "force_year_ticks": [True, False]
+    },
+    {
+        "name": "goal_home_improvement",
+        "df_name": "df_cat_monthly",
+        "filter_col": "category_group",
+        "filter": {"values": ["Goal - Home Improvement"]},
+        "color_col": "category_name",
+        "time_col": "month_start",
+        "chart_type": ["line", "bar"],
+        "title": [
+            "Goal - Home Improvement Group by Category",
+            "Goal - Home Improvement Group by Category, Cumulative"
         ],
         "force_year_ticks": [True, False]
     },
@@ -214,6 +256,21 @@ chart_specs = [
         "title": [
             "Living Expenses - Other Non-Discretionary Group by Category",
             "Living Expenses - Other Non-Discretionary Group by Category, Cumulative"
+        ],
+        "force_year_ticks": [True, False]
+    },
+    # Inflow: Internal Master Category / Ready to Assign
+    {
+        "name": "inflow",
+        "df_name": "df_pyn_monthly",
+        "filter_col": "category_name",
+        "filter": {"values": ["Inflow: Ready to Assign"]},
+        "color_col": "payee_name",
+        "time_col": "month_start",
+        "chart_type": ["line", "bar"],
+        "title": [
+            "Inflow Category by Source",
+            "Inflow Category by Source, Cumulative"
         ],
         "force_year_ticks": [True, False]
     }
