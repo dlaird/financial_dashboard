@@ -63,7 +63,7 @@ def get_ynab_data():
     df['amount'] = df['amount'] / 1000  # Convert from milliunits
     df['amount'] = df['amount'] * -1
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df['month_start'] = df['date'].dt.to_period('M').dt.to_timestamp()
+    df['month'] = df['date'].dt.to_period('M').dt.to_timestamp()
     df['year'] = df['date'].dt.year.astype(str)
     # Add 'category_supergroup' column based on prefix logic
     df["category_supergroup"] = df["category_group"].apply(

@@ -8,7 +8,7 @@ chart_specs = [
         "filter_col": "category_supergroup",
         "filter": {"values": ["Basic Expenses", "Goals", "Living Expenses"]},
         "color_col": "category_supergroup",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Category Super Groups",
@@ -108,7 +108,7 @@ chart_specs = [
         "filter_col": "category_group",
         "filter": {"values": ["Goal - Chris on Payroll"]},
         "color_col": "category_name",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Goal - Chris on Payroll Group by Category",
@@ -150,7 +150,7 @@ chart_specs = [
         "filter_col": "category_group",
         "filter": {"values": ["Goal - Home Improvement"]},
         "color_col": "category_name",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Goal - Home Improvement Group by Category",
@@ -166,7 +166,7 @@ chart_specs = [
         "filter_col": "category_group",
         "filter": {"startswith": "Living Expenses -"},
         "color_col": "category_group",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Living Expenses Category Groups",
@@ -209,7 +209,7 @@ chart_specs = [
         "filter_col": "category_group",
         "filter": {"values": ["Living Expenses - Household"]},
         "color_col": "category_name",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Living Expenses - Household Group by Category",
@@ -237,7 +237,7 @@ chart_specs = [
         "filter_col": "category_group",
         "filter": {"values": ["Living Expenses - Other Discretionary"]},
         "color_col": "category_name",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Living Expenses - Other Discretionary Group by Category",
@@ -251,7 +251,7 @@ chart_specs = [
         "filter_col": "category_group",
         "filter": {"values": ["Living Expenses - Other Non-Discretionary"]},
         "color_col": "category_name",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Living Expenses - Other Non-Discretionary Group by Category",
@@ -266,7 +266,7 @@ chart_specs = [
         "filter_col": "category_name",
         "filter": {"values": ["Inflow: Ready to Assign"]},
         "color_col": "payee_name",
-        "time_col": "month_start",
+        "time_col": "month",
         "chart_type": ["line", "bar"],
         "title": [
             "Inflow Category by Source",

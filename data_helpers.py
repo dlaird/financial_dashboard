@@ -10,7 +10,7 @@ def sort_and_cast(df, group_col, time_col, ascending_order=True):
     Parameters:
         df (pd.DataFrame): The input DataFrame.
         group_col (str): The column to group and rank by (e.g., 'category_group').
-        time_col (str): The time column to sort within groups (e.g., 'month_start').
+        time_col (str): The time column to sort within groups (e.g., 'month').
         ascending_order (bool): Whether to sort group totals ascending (bottom-up stacking).
     
     Returns:
