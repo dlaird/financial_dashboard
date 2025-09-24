@@ -7,14 +7,12 @@
 ###
 ### - organize dashboard
 
-import altair as alt
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 import socket
 from datetime import datetime, timedelta
 from pandas.tseries.offsets import DateOffset
-from datetime import datetime
 # user packages
 import data_helpers as dh
 from ynab_data_pipeline import get_ynab_data
@@ -95,6 +93,22 @@ charts["living_expenses_group_bar"].add_hline(
         color="brown")
 )
 
+# take a closer look at certain groups
+# define the anchors
+today, first_of_month, last_month, first_of_year, windows = dh.get_time_anchors()
+
+# filter by super_group
+df_cl_living = df[df["category_supergroup"] == "Living Expenses"]
+df_cl_travel = df[df["category_group"] == "Goal - Travel"]
+
+# summarize
+df_cl_living_summary = dh.prepare_summary(df_cl_living, windows, first_of_year, last_month,True)
+df_cl_travel_summary = dh.prepare_summary(df_cl_travel, windows, first_of_year, last_month,False)
+
+# style
+df_cl_living_summary_styled = dh.style_summary(df_cl_living_summary)
+df_cl_travel_summary_styled = dh.style_summary(df_cl_travel_summary)
+
 ### dashboard
 st.set_page_config(layout="wide")
 ### data bits to add to heading
@@ -107,16 +121,11 @@ with st.container():
     st.title("Spending Dashboard")
     st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
 
-
 # Sidebar
 # st.sidebar.markdown(f"**Dashboard generated:** {timestamp}")
 st.sidebar.markdown(f"""
 **Dashboard generated:**\n
-***{timestamp}***
-""")
-
-st.sidebar.markdown(f"""
-**IP Address:** `{ip_address}`  
+**{timestamp}**\n
 **Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
 """)
 
@@ -124,7 +133,10 @@ sections = [
     "Expense Super Groups",
     "Living Expenses",
     "Goals",
-    "Basic Expenses"
+    "Basic Expenses",
+    "Living Expense Details",
+    "Travel Details",
+    "Inflows"
 ]
 
 selected_section = st.sidebar.radio("**Jump to Section**", sections)
@@ -157,3 +169,15 @@ elif selected_section == "Basic Expenses":
     dh.render_chart_pair("Basic Expenses - Housing Category Group", key_prefix="basic_expenses_housing", charts=charts)
     dh.render_chart_pair("Basic Expenses - Rental Home Category Group", key_prefix="basic_expenses_rental_home", charts=charts)
     dh.render_chart_pair("Basic Expenses - Health Care Category Group", key_prefix="basic_expenses_health_care", charts=charts)
+
+elif selected_section == "Inflows":
+    dh.render_chart_pair("Inflow Category Groups", key_prefix="inflow", charts=charts)
+
+elif selected_section == "Living Expense Details":
+    st.subheader("🏠 Living Expenses Details")
+    st.dataframe(df_cl_living_summary_styled)
+
+elif selected_section == "Travel Details":
+    st.subheader("✈️ Travel Spending Details")
+    st.dataframe(df_cl_travel_summary_styled)
+

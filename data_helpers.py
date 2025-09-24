@@ -2,6 +2,8 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 import streamlit as st
+from datetime import datetime, timedelta
+from pandas.tseries.offsets import DateOffset
 
 def sort_and_cast(df, group_col, time_col, ascending_order=True):
     """
@@ -94,3 +96,117 @@ def render_chart_pair(title, chart1=None, chart2=None, key_prefix=None, charts=N
         with col2:
             st.plotly_chart(c2, use_container_width=True)
         st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
+
+# compute monthly average spend over a window
+def monthly_avg(df_cat, start_date, end_date):
+    df_window = df_cat[(df_cat["date"] >= start_date) & (df_cat["date"] <= end_date)].copy()
+    df_window["month"] = df_window["date"].dt.to_period("M").dt.to_timestamp()
+
+    # Create full month range
+    all_months = pd.date_range(start=start_date, end=end_date, freq="MS")
+
+    # Group and reindex to include zero months
+    monthly_totals = df_window.groupby("month")["amount"].sum().reindex(all_months, fill_value=0)
+
+    return monthly_totals.mean()
+
+# function to aggregate by category name
+def summarize_recent_trends(df, windows, ytd_start, last_month, by_category = False):
+    df = df.copy()
+    df["month"] = df["date"].dt.to_period("M").dt.to_timestamp()
+
+    last_month_last_day = last_month + pd.offsets.MonthEnd(0)
+    summaries = []
+
+    if by_category:
+        for cat in df["category_name"].unique():
+            df_cat = df[df["category_name"] == cat]
+
+            recent = df_cat[df_cat["month"] == last_month]["amount"].sum()
+            avg_3m = monthly_avg(df_cat, windows["3M"], last_month_last_day)
+            avg_6m = monthly_avg(df_cat, windows["6M"], last_month_last_day)
+            avg_12m = monthly_avg(df_cat, windows["12M"], last_month_last_day)
+
+            pct_ch_3m = float((recent - avg_3m))/float(avg_3m) if avg_3m else None
+            pct_ch_6m = float((recent - avg_6m))/float(avg_6m) if avg_6m else None
+            pct_ch_12m = float((recent - avg_12m))/float(avg_12m) if avg_12m else None
+
+            ytd = df_cat[df_cat["date"] >= ytd_start]["amount"].sum()
+
+            summaries.append({
+                "category_name": cat,
+                "recent_month": recent,
+                "avg_3m": avg_3m,
+                "avg_6m": avg_6m,
+                "avg_12m": avg_12m,
+                "ytd": ytd,
+                "pct_ch_3m": pct_ch_3m, 
+                "pct_ch_6m": pct_ch_6m, 
+                "pct_ch_12m": pct_ch_12m
+            })
+    else:
+        recent = df[df["month"] == last_month]["amount"].sum()
+        avg_3m = monthly_avg(df, windows["3M"], last_month_last_day)
+        avg_6m = monthly_avg(df, windows["6M"], last_month_last_day)
+        avg_12m = monthly_avg(df, windows["12M"], last_month_last_day)
+
+        pct_ch_3m = float((recent - avg_3m))/float(avg_3m) if avg_3m else None
+        pct_ch_6m = float((recent - avg_6m))/float(avg_6m) if avg_6m else None
+        pct_ch_12m = float((recent - avg_12m))/float(avg_12m) if avg_12m else None
+
+        ytd = df[df["date"] >= ytd_start]["amount"].sum()
+
+        summaries.append({
+            "category_name": "All Categories",
+            "recent_month": recent,
+            "avg_3m": avg_3m,
+            "avg_6m": avg_6m,
+            "avg_12m": avg_12m,
+            "ytd": ytd,
+            "pct_ch_3m": pct_ch_3m, 
+            "pct_ch_6m": pct_ch_6m, 
+            "pct_ch_12m": pct_ch_12m
+        })
+
+    return pd.DataFrame(summaries)
+
+
+def prepare_summary(df, windows, first_of_year, last_month, by_category):
+    summary = summarize_recent_trends(df, windows, first_of_year, last_month, by_category)
+    summary = summary[summary["ytd"] != 0].sort_values(by="recent_month", ascending=False)
+    summary = summary.round({
+        "recent_month": 0, "avg_3m": 0, "avg_6m": 0, "avg_12m": 0, "ytd": 0
+    }).reset_index(drop=True)
+    return summary
+
+def style_summary(df):
+    return (
+        df.style
+        .format({
+            "recent_month": "{:,.0f}",
+            "avg_3m": "{:,.0f}",
+            "pct_ch_3m": "{:.1%}",
+            "avg_6m": "{:,.0f}",
+            "pct_ch_6m": "{:.1%}",
+            "avg_12m": "{:,.0f}",
+            "pct_ch_12m": "{:.1%}",
+            "ytd": "{:,.0f}"
+        })
+        .set_properties(**{"font-size": "16px", "font-weight": "bold"})
+        .set_table_styles([
+            {'selector': 'th', 'props': [('min-width', '60px')]},
+            {'selector': 'td', 'props': [('min-width', '60px')]}
+        ])
+    )
+
+def get_time_anchors():
+    today = pd.Timestamp.today()
+    first_of_month = today.replace(day=1)
+    last_month = (first_of_month - pd.DateOffset(months=1)).normalize()
+    first_of_year = pd.Timestamp(year=today.year, month=1, day=1)
+    windows = {
+        "3M": last_month - pd.DateOffset(months=2),
+        "6M": last_month - pd.DateOffset(months=5),
+        "12M": last_month - pd.DateOffset(months=11),
+    }
+    return today, first_of_month, last_month, first_of_year, windows
