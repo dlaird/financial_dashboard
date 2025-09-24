@@ -7,15 +7,19 @@
 ###
 ### - organize dashboard
 
+import altair as alt
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import data_helpers as dh
 import socket
-from ynab_data_pipeline import get_ynab_data
+from datetime import datetime, timedelta
 from pandas.tseries.offsets import DateOffset
-from config_charts import chart_specs
 from datetime import datetime
+# user packages
+import data_helpers as dh
+from ynab_data_pipeline import get_ynab_data
+from config_charts import chart_specs
+# from config_charts_dev import chart_specs
 
 ### get data
 ### use_api toggle
@@ -25,9 +29,9 @@ if use_api:
     df = get_ynab_data()
 else:
     df = pd.read_csv("ynab_extract.csv")
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
 ### grouping 
-
 ### summarizing transaction data by summing amounts by:
 ###   category_supergroup (e.g.,Basic Expenses, Goals, Living Expenses)
 ###   category_group (e.g., Health Care, Travel, Insurance)
@@ -92,110 +96,8 @@ charts["living_expenses_group_bar"].add_hline(
 )
 
 ### dashboard
-### data bits to add to heading
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-hostname = socket.gethostname()
-ip_address = socket.gethostbyname(hostname)
-port = 8501  # default Streamlit port
-
-
-# st.set_page_config(layout="wide")
-
-# with st.container():
-#     st.title("Spending Dashboard")
-#     st.markdown(f"**Dashboard generated:** {timestamp}")
-#     st.markdown(f"""
-#     **Host:** `{hostname}`  
-#     **IP Address:** `{ip_address}`  
-#     **Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
-#     """)
-#     st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
-
-### classic
-# with st.expander("📊 Expense Category Super Groups"):
-#     dh.render_chart_pair("Expense Category Super Groups (Yearly)", key_prefix="category_supergroups_yearly", charts=charts)
-#     dh.render_chart_pair("Expense Category Super Groups (Monthly)", key_prefix="category_supergroups_monthly", charts=charts)
-
-# with st.expander("🏠 Living Expenses"):
-#     dh.render_chart_pair("Living Expenses Category Groups", key_prefix="living_expenses_group", charts=charts)
-#     dh.render_chart_pair("Household Expenses Category Group", key_prefix="living_expenses_household", charts=charts)
-#     dh.render_chart_pair("Other Discretionary Expenses Category Group", key_prefix="living_expenses_other_discretionary", charts=charts)
-#     dh.render_chart_pair("Other Non-Discretionary Expenses Category Group", key_prefix="living_expenses_other_non_discretionary", charts=charts)
-#     dh.render_chart_pair("Insurance Expenses Category Group", key_prefix="living_expenses_insurance", charts=charts)
-#     dh.render_chart_pair("Auto/Transport Expenses Category Group", key_prefix="living_expenses_auto_transport", charts=charts)
-
-# with st.expander("🎯 Goals"):
-#     dh.render_chart_pair("Goals Category Groups", key_prefix="goal_group", charts=charts)
-#     dh.render_chart_pair("Chris on Payroll Goal Category Group", key_prefix="goal_chris_on_payroll", charts=charts)
-#     dh.render_chart_pair("Travel Goal Category Group", key_prefix="goal_travel", charts=charts)
-#     # dh.render_chart_pair("Travel Goal Category Group", chart1=charts["goal_travel_line"], chart2=charts["goal_travel_bar"])
-#     dh.render_chart_pair("Children - Non Academic Goal Category Group", key_prefix="goal_children_non_academic", charts=charts)
-#     dh.render_chart_pair("Home Improvement Goal Category Group", key_prefix="goal_home_improvement", charts=charts)
-
-# with st.expander("🧱 Basic Expenses"):
-#     dh.render_chart_pair("Basic Expenses Category Groups", key_prefix="basic_expenses_group", charts=charts)
-#     dh.render_chart_pair("Basic Expenses - Housing Category Group", key_prefix="basic_expenses_housing", charts=charts)
-#     dh.render_chart_pair("Basic Expenses - Rental Home Category Group", key_prefix="basic_expenses_rental_home", charts=charts)
-#     dh.render_chart_pair("Basic Expenses - Health Care Category Group", key_prefix="basic_expenses_health_care", charts=charts)
-
-# with st.expander("💰 Inflow"):
-#     dh.render_chart_pair("Inflow by Source", key_prefix="inflow", charts=charts)
-
-
-## Sidebar
-# sections = [
-#     "Expense Super Groups",
-#     "Living Expenses",
-#     "Goals",
-#     "Basic Expenses"
-# ]
-
-# selected_section = st.sidebar.radio("Jump to Section", sections)
-
-# if selected_section == "Expense Super Groups":
-#     # with st.expander("📊 Expense Category Super Groups"):
-#     dh.render_chart_pair("Expense Category Super Groups (Yearly)", key_prefix="category_supergroups_yearly", charts=charts)
-#     dh.render_chart_pair("Expense Category Super Groups (Monthly)", key_prefix="category_supergroups_monthly", charts=charts)
-
-# elif selected_section == "Living Expenses":
-#     # with st.expander("🏠 Living Expenses"):
-#     dh.render_chart_pair("Living Expenses Category Groups", key_prefix="living_expenses_group", charts=charts)
-#     dh.render_chart_pair("Household Expenses Category Group", key_prefix="living_expenses_household", charts=charts)
-#     dh.render_chart_pair("Other Discretionary Expenses Category Group", key_prefix="living_expenses_other_discretionary", charts=charts)
-#     dh.render_chart_pair("Other Non-Discretionary Expenses Category Group", key_prefix="living_expenses_other_non_discretionary", charts=charts)
-#     dh.render_chart_pair("Insurance Expenses Category Group", key_prefix="living_expenses_insurance", charts=charts)
-#     dh.render_chart_pair("Auto/Transport Expenses Category Group", key_prefix="living_expenses_auto_transport", charts=charts)
-
-# elif selected_section == "Goals":
-#     # with st.expander("🎯 Goals"):
-#     dh.render_chart_pair("Goals Category Groups", key_prefix="goal_group", charts=charts)
-#     dh.render_chart_pair("Chris on Payroll Goal Category Group", key_prefix="goal_chris_on_payroll", charts=charts)
-#     dh.render_chart_pair("Travel Goal Category Group", key_prefix="goal_travel", charts=charts)
-#     dh.render_chart_pair("Children - Non Academic Goal Category Group", key_prefix="goal_children_non_academic", charts=charts)
-#     dh.render_chart_pair("Home Improvement Goal Category Group", key_prefix="goal_home_improvement", charts=charts)
-
-# elif selected_section == "Basic Expenses":
-#     # with st.expander("🧱 Basic Expenses"):
-#     dh.render_chart_pair("Basic Expenses Category Groups", key_prefix="basic_expenses_group", charts=charts)
-#     dh.render_chart_pair("Basic Expenses - Housing Category Group", key_prefix="basic_expenses_housing", charts=charts)
-#     dh.render_chart_pair("Basic Expenses - Rental Home Category Group", key_prefix="basic_expenses_rental_home", charts=charts)
-#     dh.render_chart_pair("Basic Expenses - Health Care Category Group", key_prefix="basic_expenses_health_care", charts=charts)
-
-# import streamlit as st
-
 st.set_page_config(layout="wide")
-
-# --- Sidebar Navigation ---
-sections = [
-    "Expense Super Groups",
-    "Living Expenses",
-    "Goals",
-    "Basic Expenses"
-]
-selected_section = st.sidebar.radio("Jump to Section", sections)
-
-# --- Header Container ---
+### data bits to add to heading
 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 hostname = socket.gethostname()
 ip_address = socket.gethostbyname(hostname)
@@ -203,63 +105,55 @@ port = 8501  # default Streamlit port
 
 with st.container():
     st.title("Spending Dashboard")
-    st.markdown(f"**Dashboard generated:** {timestamp}")
-    st.markdown(f"""
-    **Host:** `{hostname}`  
-    **IP Address:** `{ip_address}`  
-    **Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
-    """)
     st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
 
-# --- Section Rendering ---
+
+# Sidebar
+# st.sidebar.markdown(f"**Dashboard generated:** {timestamp}")
+st.sidebar.markdown(f"""
+**Dashboard generated:**\n
+***{timestamp}***
+""")
+
+st.sidebar.markdown(f"""
+**IP Address:** `{ip_address}`  
+**Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
+""")
+
+sections = [
+    "Expense Super Groups",
+    "Living Expenses",
+    "Goals",
+    "Basic Expenses"
+]
+
+selected_section = st.sidebar.radio("**Jump to Section**", sections)
+
 if selected_section == "Expense Super Groups":
-    with st.container():
-        st.subheader("📊 Expense Category Super Groups")
-        tab1, tab2 = st.tabs(["Yearly", "Monthly"])
-        with tab1:
-            with st.expander("View Yearly Trends", expanded=True):
-                dh.render_chart_pair("Expense Category Super Groups (Yearly)", key_prefix="category_supergroups_yearly", charts=charts)
-        with tab2:
-            with st.expander("View Monthly Trends", expanded=True):
-                dh.render_chart_pair("Expense Category Super Groups (Monthly)", key_prefix="category_supergroups_monthly", charts=charts)
+    # with st.expander("📊 Expense Category Super Groups"):
+    dh.render_chart_pair("Expense Category Super Groups (Yearly)", key_prefix="category_supergroups_yearly", charts=charts)
+    dh.render_chart_pair("Expense Category Super Groups (Monthly)", key_prefix="category_supergroups_monthly", charts=charts)
 
 elif selected_section == "Living Expenses":
-    with st.container():
-        st.subheader("🏠 Living Expenses")
-        with st.expander("All Living Expense Groups", expanded=True):
-            dh.render_chart_pair("Living Expenses Category Groups", key_prefix="living_expenses_group", charts=charts)
-        tab1, tab2 = st.tabs(["Discretionary", "Non-Discretionary"])
-        with tab1:
-            dh.render_chart_pair("Other Discretionary Expenses Category Group", key_prefix="living_expenses_other_discretionary", charts=charts)
-        with tab2:
-            dh.render_chart_pair("Other Non-Discretionary Expenses Category Group", key_prefix="living_expenses_other_non_discretionary", charts=charts)
-        with st.expander("Household, Insurance, and Auto", expanded=False):
-            dh.render_chart_pair("Household Expenses Category Group", key_prefix="living_expenses_household", charts=charts)
-            dh.render_chart_pair("Insurance Expenses Category Group", key_prefix="living_expenses_insurance", charts=charts)
-            dh.render_chart_pair("Auto/Transport Expenses Category Group", key_prefix="living_expenses_auto_transport", charts=charts)
+    # with st.expander("🏠 Living Expenses"):
+    dh.render_chart_pair("Living Expenses Category Groups", key_prefix="living_expenses_group", charts=charts)
+    dh.render_chart_pair("Household Expenses Category Group", key_prefix="living_expenses_household", charts=charts)
+    dh.render_chart_pair("Other Discretionary Expenses Category Group", key_prefix="living_expenses_other_discretionary", charts=charts)
+    dh.render_chart_pair("Other Non-Discretionary Expenses Category Group", key_prefix="living_expenses_other_non_discretionary", charts=charts)
+    dh.render_chart_pair("Insurance Expenses Category Group", key_prefix="living_expenses_insurance", charts=charts)
+    dh.render_chart_pair("Auto/Transport Expenses Category Group", key_prefix="living_expenses_auto_transport", charts=charts)
 
 elif selected_section == "Goals":
-    with st.container():
-        st.subheader("🎯 Goals")
-        with st.expander("All Goal Groups", expanded=True):
-            dh.render_chart_pair("Goals Category Groups", key_prefix="goal_group", charts=charts)
-        tab1, tab2 = st.tabs(["Travel", "Children"])
-        with tab1:
-            dh.render_chart_pair("Travel Goal Category Group", key_prefix="goal_travel", charts=charts)
-        with tab2:
-            dh.render_chart_pair("Children - Non Academic Goal Category Group", key_prefix="goal_children_non_academic", charts=charts)
-        with st.expander("Other Goals", expanded=False):
-            dh.render_chart_pair("Chris on Payroll Goal Category Group", key_prefix="goal_chris_on_payroll", charts=charts)
-            dh.render_chart_pair("Home Improvement Goal Category Group", key_prefix="goal_home_improvement", charts=charts)
+    # with st.expander("🎯 Goals"):
+    dh.render_chart_pair("Goals Category Groups", key_prefix="goal_group", charts=charts)
+    dh.render_chart_pair("Chris on Payroll Goal Category Group", key_prefix="goal_chris_on_payroll", charts=charts)
+    dh.render_chart_pair("Travel Goal Category Group", key_prefix="goal_travel", charts=charts)
+    dh.render_chart_pair("Children - Non Academic Goal Category Group", key_prefix="goal_children_non_academic", charts=charts)
+    dh.render_chart_pair("Home Improvement Goal Category Group", key_prefix="goal_home_improvement", charts=charts)
 
 elif selected_section == "Basic Expenses":
-    with st.container():
-        st.subheader("🧱 Basic Expenses")
-        with st.expander("All Basic Expense Groups", expanded=True):
-            dh.render_chart_pair("Basic Expenses Category Groups", key_prefix="basic_expenses_group", charts=charts)
-        tab1, tab2 = st.tabs(["Housing", "Health Care"])
-        with tab1:
-            dh.render_chart_pair("Basic Expenses - Housing Category Group", key_prefix="basic_expenses_housing", charts=charts)
-            dh.render_chart_pair("Basic Expenses - Rental Home Category Group", key_prefix="basic_expenses_rental_home", charts=charts)
-        with tab2:
-            dh.render_chart_pair("Basic Expenses - Health Care Category Group", key_prefix="basic_expenses_health_care", charts=charts)
+    # with st.expander("🧱 Basic Expenses"):
+    dh.render_chart_pair("Basic Expenses Category Groups", key_prefix="basic_expenses_group", charts=charts)
+    dh.render_chart_pair("Basic Expenses - Housing Category Group", key_prefix="basic_expenses_housing", charts=charts)
+    dh.render_chart_pair("Basic Expenses - Rental Home Category Group", key_prefix="basic_expenses_rental_home", charts=charts)
+    dh.render_chart_pair("Basic Expenses - Health Care Category Group", key_prefix="basic_expenses_health_care", charts=charts)
