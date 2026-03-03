@@ -20,10 +20,10 @@ from config_charts import chart_specs
 # from config_charts_dev import chart_specs
 
 ### get data
-### use_api toggle
-use_api = 0  # Set to False to load from CSV instead
+### refresh_data toggle
+refresh_data = 1  # Set to False to load from CSV instead
 
-if use_api:
+if refresh_data:
     df = get_ynab_data()
 else:
     df = pd.read_csv("ynab_extract.csv")
