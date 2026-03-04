@@ -2,8 +2,9 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 import streamlit as st
-from datetime import datetime, timedelta
-from pandas.tseries.offsets import DateOffset
+
+HIGHLIGHT_THRESHOLD = 0.15  # pct change cell turns red/green in summary tables
+ALERT_THRESHOLD = 0.20      # category appears in Spending Alerts section
 
 def sort_and_cast(df, group_col, time_col, ascending_order=True):
     """
@@ -92,9 +93,9 @@ def render_chart_pair(title, chart1=None, chart2=None, key_prefix=None, charts=N
     with st.container():
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(c1, use_container_width=True)
+            st.plotly_chart(c1, width='stretch')
         with col2:
-            st.plotly_chart(c2, use_container_width=True)
+            st.plotly_chart(c2, width='stretch')
         st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
 
 # compute monthly average spend over a window
@@ -111,16 +112,16 @@ def monthly_avg(df_cat, start_date, end_date):
     return monthly_totals.mean()
 
 # function to aggregate by category name
-def summarize_recent_trends(df, windows, ytd_start, last_month, by_category = False):
+def summarize_recent_trends(df, windows, ytd_start, last_month, group_col=None):
     df = df.copy()
     df["month"] = df["date"].dt.to_period("M").dt.to_timestamp()
 
     last_month_last_day = last_month + pd.offsets.MonthEnd(0)
     summaries = []
 
-    if by_category:
-        for cat in df["category_name"].unique():
-            df_cat = df[df["category_name"] == cat]
+    if group_col is not None:
+        for cat in df[group_col].unique():
+            df_cat = df[df[group_col] == cat]
 
             recent = df_cat[df_cat["month"] == last_month]["amount"].sum()
             avg_3m = monthly_avg(df_cat, windows["3M"], last_month_last_day)
@@ -140,8 +141,8 @@ def summarize_recent_trends(df, windows, ytd_start, last_month, by_category = Fa
                 "avg_6m": avg_6m,
                 "avg_12m": avg_12m,
                 "ytd": ytd,
-                "pct_ch_3m": pct_ch_3m, 
-                "pct_ch_6m": pct_ch_6m, 
+                "pct_ch_3m": pct_ch_3m,
+                "pct_ch_6m": pct_ch_6m,
                 "pct_ch_12m": pct_ch_12m
             })
     else:
@@ -163,21 +164,33 @@ def summarize_recent_trends(df, windows, ytd_start, last_month, by_category = Fa
             "avg_6m": avg_6m,
             "avg_12m": avg_12m,
             "ytd": ytd,
-            "pct_ch_3m": pct_ch_3m, 
-            "pct_ch_6m": pct_ch_6m, 
+            "pct_ch_3m": pct_ch_3m,
+            "pct_ch_6m": pct_ch_6m,
             "pct_ch_12m": pct_ch_12m
         })
 
     return pd.DataFrame(summaries)
 
 
-def prepare_summary(df, windows, first_of_year, last_month, by_category):
-    summary = summarize_recent_trends(df, windows, first_of_year, last_month, by_category)
-    summary = summary[summary["ytd"] != 0].sort_values(by="recent_month", ascending=False)
+def prepare_summary(df, windows, first_of_year, last_month, group_col=None):
+    summary = summarize_recent_trends(df, windows, first_of_year, last_month, group_col)
+    summary = summary[summary["ytd"] != 0].sort_values(by="pct_ch_3m", ascending=False, na_position="last")
     summary = summary.round({
         "recent_month": 0, "avg_3m": 0, "avg_6m": 0, "avg_12m": 0, "ytd": 0
     }).reset_index(drop=True)
     return summary
+
+def _color_pct(val):
+    try:
+        if pd.isna(val):
+            return ''
+    except (TypeError, ValueError):
+        return ''
+    if val > HIGHLIGHT_THRESHOLD:
+        return 'background-color: #ffcccc'
+    if val < -HIGHLIGHT_THRESHOLD:
+        return 'background-color: #ccffcc'
+    return ''
 
 def style_summary(df):
     return (
@@ -191,13 +204,76 @@ def style_summary(df):
             "avg_12m": "{:,.0f}",
             "pct_ch_12m": "{:.1%}",
             "ytd": "{:,.0f}"
-        })
+        }, na_rep="-")
+        .map(_color_pct, subset=["pct_ch_3m", "pct_ch_6m", "pct_ch_12m"])
         .set_properties(**{"font-size": "16px", "font-weight": "bold"})
         .set_table_styles([
             {'selector': 'th', 'props': [('min-width', '60px')]},
             {'selector': 'td', 'props': [('min-width', '60px')]}
         ])
     )
+
+def make_sunburst(df, year=None):
+    df_sb = df[df["category_supergroup"].isin(["Living Expenses", "Goals", "Basic Expenses"])].copy()
+    if year and year != "All":
+        df_sb = df_sb[df_sb["year"] == year]
+    df_sb = df_sb[df_sb["amount"] > 0]
+    df_sb["payee_name"] = df_sb["payee_name"].fillna("Unknown")
+    df_sb = df_sb.groupby(
+        ["category_supergroup", "category_group", "category_name", "payee_name"],
+        as_index=False
+    )["amount"].sum()
+
+    title = f"Spending Breakdown — {year}" if year and year != "All" else "Spending Breakdown — All Years"
+    fig = px.sunburst(
+        df_sb,
+        path=["category_supergroup", "category_group", "category_name", "payee_name"],
+        values="amount",
+        title=title,
+    )
+    fig.update_traces(textinfo="label+percent parent")
+    fig.update_layout(height=700)
+    return fig
+
+def payee_name_report(df, top_n=75):
+    df_exp = df[df["amount"] > 0].copy()
+    df_exp["payee_name"] = df_exp["payee_name"].fillna("Unknown")
+
+    # Top payees by transaction count
+    top_payees = (
+        df_exp.groupby("payee_name")
+        .agg(transactions=("amount", "count"), total_spent=("amount", "sum"))
+        .reset_index()
+        .sort_values("transactions", ascending=False)
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+
+    # Name variants: normalize to first 10 chars (lowercase, alphanumeric only)
+    df_exp["_prefix"] = (
+        df_exp["payee_name"]
+        .str.lower()
+        .str.replace(r"[^a-z0-9 ]", " ", regex=True)
+        .str.strip()
+        .str[:10]
+    )
+    variants = (
+        df_exp.groupby("_prefix")
+        .agg(
+            variants=("payee_name", lambda x: sorted(x.unique().tolist())),
+            transactions=("amount", "count"),
+        )
+        .reset_index()
+    )
+    variants["variant_count"] = variants["variants"].apply(len)
+    variants = (
+        variants[variants["variant_count"] > 1]
+        .sort_values(["variant_count", "transactions"], ascending=[False, False])
+        .reset_index(drop=True)
+        [["variants", "variant_count", "transactions"]]
+    )
+
+    return top_payees, variants
 
 def get_time_anchors():
     today = pd.Timestamp.today()
