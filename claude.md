@@ -10,6 +10,7 @@ Do you have any suggestions for enhancing the code, both to improve what it's do
 
 What is possible and how much is realistic for me to implement?
 
+=============================================================================================
 
 Session Summary — 2026-03-04
 Enhancements implemented
@@ -41,3 +42,35 @@ Next logical steps discussed but not yet implemented
 Transaction-level drill-down from sunburst: click a segment → filter a st.dataframe of matching transactions below the chart (requires Streamlit on_select event handling, available in Streamlit ≥1.35)
 Treemap / Icicle chart variants (same data as sunburst, one-word swap in px.sunburst → px.treemap / px.icicle)
 Separate per-supergroup sunbursts going 4 levels deep within each supergroup
+
+=============================================================================================
+
+Session Summary — 2026-03-04 (Session 2)
+Enhancements implemented
+
+data_helpers.py
+
+Removed dead filter_by_click() function (leftover from abandoned click-based drill-down attempt in prior session)
+Removed clickmode="event+select" from make_hierarchy_chart (also leftover)
+Added supergroup=None parameter to make_hierarchy_chart: when a supergroup is selected, it is dropped from the path hierarchy so category_group becomes the root node (3-level chart instead of 4-level); title updates accordingly
+Added @st.cache_data decorator to make_hierarchy_chart, make_heatmap, and make_bubble_chart so they only recompute when inputs (df, filters) actually change
+financial_dashboard.py
+
+Spending Breakdown section restructured:
+Added Select Supergroup dropdown alongside Select Year (two shared filters at top)
+Changed from 3 chart tabs to 4 tabs: Sunburst | Treemap | Icicle | Transactions
+Added key=f"{type}_{year}_{sg}" to each st.plotly_chart call to force full widget replacement on filter change (fixes Treemap not updating when path structure changes between All and single-supergroup views)
+Transaction drill-down moved into the Transactions tab; when a supergroup is pre-selected above, the Supergroup dropdown is omitted (3 cascading dropdowns instead of 4)
+Metric font size: injected global CSS (stMetricValue → 1.1rem, stMetricLabel → 0.8rem) to bring st.metric in line with surrounding content
+Performance: wrapped all expensive top-level computations in @st.cache_data functions so Streamlit reruns (triggered by every user interaction) skip recomputation:
+load_data(refresh) — caches CSV read / YNAB API call
+build_static_charts(df) — caches all 8 groupby aggregations and ~20 Plotly chart builds from the chart_specs loop; eliminates the globals()[spec["df_name"]] lookup by using a local agg dict instead
+compute_summaries(df, windows, first_of_year, last_month) — caches 5 prepare_summary calls (windowed average computation); cache key is stable within a calendar month
+Architecture notes
+
+build_static_charts now owns all groupby aggregations internally; the module-level df_sgrp_monthly etc. variables no longer exist
+@st.cache_data on chart functions: first load populates all caches; subsequent interactions (tab switches, dropdown changes that don't affect cached parameters) are near-instant
+load_data(True) and load_data(False) are cached separately, so --refresh-data data doesn't pollute the CSV-cached version
+Next logical steps discussed but not yet implemented
+
+None remaining from prior notes; all three original items are now complete

@@ -1,10 +1,11 @@
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import numpy as np
 import streamlit as st
 
 HIGHLIGHT_THRESHOLD = 0.15  # pct change cell turns red/green in summary tables
-ALERT_THRESHOLD = 0.20      # category appears in Spending Alerts section
+ALERT_THRESHOLD = 0.10      # category appears in Spending Alerts section
 
 def sort_and_cast(df, group_col, time_col, ascending_order=True):
     """
@@ -213,25 +214,47 @@ def style_summary(df):
         ])
     )
 
-def make_sunburst(df, year=None):
+@st.cache_data
+def make_hierarchy_chart(df, chart_type="sunburst", year=None, supergroup=None):
+    """Build a hierarchy chart (sunburst, treemap, or icicle) of spending.
+
+    Args:
+        df: raw transactions DataFrame
+        chart_type: "sunburst", "treemap", or "icicle"
+        year: year value to filter, or None / "All" for all years
+        supergroup: one of the supergroup names to filter, or None / "All" for all
+    """
     df_sb = df[df["category_supergroup"].isin(["Living Expenses", "Goals", "Basic Expenses"])].copy()
     if year and year != "All":
         df_sb = df_sb[df_sb["year"] == year]
+    if supergroup and supergroup != "All":
+        df_sb = df_sb[df_sb["category_supergroup"] == supergroup]
     df_sb = df_sb[df_sb["amount"] > 0]
     df_sb["payee_name"] = df_sb["payee_name"].fillna("Unknown")
-    df_sb = df_sb.groupby(
-        ["category_supergroup", "category_group", "category_name", "payee_name"],
-        as_index=False
-    )["amount"].sum()
 
-    title = f"Spending Breakdown — {year}" if year and year != "All" else "Spending Breakdown — All Years"
-    fig = px.sunburst(
-        df_sb,
-        path=["category_supergroup", "category_group", "category_name", "payee_name"],
-        values="amount",
-        title=title,
-    )
-    fig.update_traces(textinfo="label+percent parent")
+    # When filtered to one supergroup, drop it from the path so Group is the root
+    if supergroup and supergroup != "All":
+        path = ["category_group", "category_name", "payee_name"]
+    else:
+        path = ["category_supergroup", "category_group", "category_name", "payee_name"]
+
+    df_sb = df_sb.groupby(path, as_index=False)["amount"].sum()
+
+    year_label = year if year and year != "All" else "All Years"
+    sg_label = supergroup if supergroup and supergroup != "All" else None
+    title_parts = [p for p in [sg_label, year_label] if p]
+    title = "Spending Breakdown" + (" — " + " — ".join(str(p) for p in title_parts) if title_parts else "")
+
+    if chart_type == "treemap":
+        fig = px.treemap(df_sb, path=path, values="amount", title=title)
+        fig.update_traces(textinfo="label+value+percent parent")
+    elif chart_type == "icicle":
+        fig = px.icicle(df_sb, path=path, values="amount", title=title)
+        fig.update_traces(textinfo="label+value+percent parent")
+    else:  # sunburst (default)
+        fig = px.sunburst(df_sb, path=path, values="amount", title=title)
+        fig.update_traces(textinfo="label+percent parent")
+
     fig.update_layout(height=700)
     return fig
 
@@ -274,6 +297,98 @@ def payee_name_report(df, top_n=75):
     )
 
     return top_payees, variants
+
+@st.cache_data
+def make_heatmap(df, supergroup=None, year=None):
+    """Monthly spend heatmap, color normalized per row (vs each category's own mean).
+
+    Each cell's color shows how that month compares to that category's average,
+    so small and large categories are both visible. Hover shows actual $ amounts.
+    """
+    df_h = df[df["category_supergroup"].isin(["Living Expenses", "Goals", "Basic Expenses"])].copy()
+    if supergroup and supergroup != "All":
+        df_h = df_h[df_h["category_supergroup"] == supergroup]
+    if year and year != "All":
+        df_h = df_h[df_h["year"] == year]
+    df_h = df_h[df_h["amount"] > 0]
+
+    df_h["month"] = df_h["date"].dt.to_period("M").dt.to_timestamp()
+    grouped = df_h.groupby(["category_group", "month"])["amount"].sum().reset_index()
+    pivot = grouped.pivot(index="category_group", columns="month", values="amount").fillna(0)
+    pivot.columns = [col.strftime("%Y-%m") for col in pivot.columns]
+    pivot = pivot.sort_index()
+
+    year_str = str(year) if year and year != "All" else None
+    parts = [p for p in [supergroup if supergroup != "All" else None, year_str] if p]
+    title = "Monthly Spend Heatmap" + (f" — {', '.join(parts)}" if parts else " — All")
+
+    # Normalize each row to its mean so all categories show relative variation equally
+    row_means = pivot.mean(axis=1).replace(0, 1)
+    pivot_norm = pivot.div(row_means, axis=0)
+
+    customdata_fmt = np.array([[f"${v:,.0f}" for v in row] for row in pivot.values])
+
+    fig = go.Figure(data=go.Heatmap(
+        z=pivot_norm.values,
+        x=pivot.columns.tolist(),
+        y=pivot.index.tolist(),
+        customdata=customdata_fmt,
+        hovertemplate="%{y}<br>%{x}<br>%{customdata}<extra></extra>",
+        colorscale="RdYlGn_r",
+        zmid=1.0,
+        colorbar=dict(
+            title="vs avg",
+            tickvals=[0, 0.5, 1.0, 1.5, 2.0, 3.0],
+            ticktext=["0×", "0.5×", "1× (avg)", "1.5×", "2×", "3×"],
+        ),
+    ))
+    fig.update_xaxes(tickangle=45, title="Month")
+    fig.update_yaxes(title="Category Group", autorange="reversed")
+    fig.update_layout(title=title, height=max(400, len(pivot) * 28 + 100))
+    return fig
+
+
+@st.cache_data
+def make_bubble_chart(df, windows, first_of_year, last_month):
+    """Bubble chart: X=12m avg spend, Y=recent % change vs 3m avg, size=YTD, color=supergroup.
+
+    High-spend + high-deviation categories appear in the top-right and jump out immediately.
+    """
+    df_main = df[df["category_supergroup"].isin(["Living Expenses", "Goals", "Basic Expenses"])].copy()
+    supergroup_map = (
+        df_main.groupby("category_group")["category_supergroup"]
+        .agg(lambda x: x.mode()[0])
+        .to_dict()
+    )
+
+    summary = prepare_summary(df_main, windows, first_of_year, last_month, group_col="category_group")
+    summary["supergroup"] = summary["category_name"].map(supergroup_map)
+    summary = summary[(summary["avg_12m"] > 0) & (summary["ytd"] > 0) & summary["pct_ch_3m"].notna()].copy()
+
+    fig = px.scatter(
+        summary,
+        x="avg_12m",
+        y="pct_ch_3m",
+        size="ytd",
+        color="supergroup",
+        hover_name="category_name",
+        hover_data={"avg_12m": ":,.0f", "pct_ch_3m": ":.1%", "ytd": ":,.0f", "supergroup": False},
+        labels={
+            "avg_12m": "12-Month Avg Monthly Spend ($)",
+            "pct_ch_3m": "Recent Change vs 3M Avg",
+            "ytd": "YTD Total ($)",
+            "supergroup": "Supergroup",
+        },
+        title="Spending Deviation — Size = YTD Total",
+        size_max=60,
+    )
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="No change")
+    fig.add_hline(y=ALERT_THRESHOLD, line_dash="dot", line_color="red",
+                  annotation_text="Alert threshold", annotation_position="top right")
+    fig.update_yaxes(tickformat=".0%")
+    fig.update_layout(height=600)
+    return fig
+
 
 def get_time_anchors():
     today = pd.Timestamp.today()
