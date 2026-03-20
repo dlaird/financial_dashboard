@@ -21,6 +21,8 @@ import data_helpers as dh
 from data_helpers import ALERT_THRESHOLD
 from ynab_data_pipeline import get_ynab_data
 from config_charts import chart_specs
+import pending_db
+import ynab_writer as yw
 # from config_charts_dev import chart_specs
 
 ### get data
@@ -145,6 +147,9 @@ st.sidebar.markdown(f"""
 **Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
 """)
 
+_pending_count = len(pending_db.get_pending())
+_pending_label = f"Pending Transactions ({_pending_count})" if _pending_count else "Pending Transactions"
+
 sections = [
     "Spending Alerts",
     "Spending Breakdown",
@@ -156,12 +161,134 @@ sections = [
     "Basic Expenses",
     "Living Expense Details",
     "Travel Details",
-    "Inflows"
+    "Inflows",
+    _pending_label,
 ]
 
 selected_section = st.sidebar.radio("**Jump to Section**", sections)
 
-if selected_section == "Spending Alerts":
+@st.cache_data(ttl=300)
+def _ynab_accounts():
+    try:
+        return yw.get_accounts()
+    except Exception:
+        return []
+
+@st.cache_data(ttl=300)
+def _ynab_categories():
+    try:
+        return yw.get_categories()
+    except Exception:
+        return []
+
+if selected_section == _pending_label:
+    st.subheader("📬 Pending Transactions")
+    st.caption("Transactions parsed from email — review, edit, then approve or reject.")
+
+    pending = pending_db.get_pending()
+    if not pending:
+        st.success("No pending transactions. Send a YNAB email to get started.")
+    else:
+        accounts = _ynab_accounts()
+        categories = _ynab_categories()
+        acct_names = [a["name"] for a in accounts]
+        cat_names = [f"{c['group_name']} → {c['name']}" for c in categories]
+        cat_lookup = {f"{c['group_name']} → {c['name']}": c["id"] for c in categories}
+        acct_lookup = {a["name"]: a["id"] for a in accounts}
+
+        if "dup_warnings" not in st.session_state:
+            st.session_state["dup_warnings"] = {}
+
+        for tx in pending:
+            tx_id = tx["id"]
+            label = f"#{tx_id} — {tx.get('payee') or 'Unknown payee'}  |  ${abs((tx.get('amount_milliunits') or 0) / 1000):.2f}  |  {tx.get('date', '')}"
+            with st.expander(label, expanded=True):
+                if tx.get("parse_warnings"):
+                    st.warning(f"Parse warnings: {tx['parse_warnings']}")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    payee = st.text_input("Payee", value=tx.get("payee") or "", key=f"payee_{tx_id}")
+                    amount_dollars = st.number_input(
+                        "Amount ($)",
+                        value=abs((tx.get("amount_milliunits") or 0) / 1000),
+                        min_value=0.0, step=0.01, format="%.2f",
+                        key=f"amt_{tx_id}",
+                    )
+                    tx_date = st.text_input("Date (YYYY-MM-DD)", value=tx.get("date") or "", key=f"date_{tx_id}")
+
+                with col2:
+                    # Account selector
+                    default_acct = tx.get("account_name") or ""
+                    acct_options = acct_names if acct_names else [default_acct]
+                    acct_idx = acct_options.index(default_acct) if default_acct in acct_options else 0
+                    selected_acct = st.selectbox("Account", acct_options, index=acct_idx, key=f"acct_{tx_id}")
+
+                    # Category selector
+                    default_cat_display = ""
+                    if tx.get("category_name"):
+                        matches = [k for k in cat_names if tx["category_name"] in k]
+                        default_cat_display = matches[0] if matches else ""
+                    cat_options = ["(none)"] + cat_names
+                    cat_idx = cat_options.index(default_cat_display) if default_cat_display in cat_options else 0
+                    selected_cat_display = st.selectbox("Category", cat_options, index=cat_idx, key=f"cat_{tx_id}")
+
+                    memo = st.text_input("Memo", value=tx.get("memo") or "", key=f"memo_{tx_id}")
+
+                # Duplicate warning (persists across reruns via session state)
+                dup_key = f"dups_{tx_id}"
+                if st.session_state["dup_warnings"].get(dup_key):
+                    dups = st.session_state["dup_warnings"][dup_key]
+                    st.error(f"⚠️ {len(dups)} possible duplicate(s) found in YNAB:")
+                    for d in dups:
+                        st.markdown(f"- {d['date']}  |  {d['payee']}  |  ${abs(d['amount_milliunits']/1000):.2f}")
+
+                btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 4])
+                approve_label = "Approve Anyway" if st.session_state["dup_warnings"].get(dup_key) else "Approve"
+
+                with btn_col1:
+                    if st.button(approve_label, key=f"approve_{tx_id}", type="primary"):
+                        amount_mu = -int(round(amount_dollars * 1000))
+                        resolved_acct_id = acct_lookup.get(selected_acct)
+                        resolved_cat_id = cat_lookup.get(selected_cat_display) if selected_cat_display != "(none)" else None
+
+                        # Duplicate check (skip if already warned)
+                        if not st.session_state["dup_warnings"].get(dup_key):
+                            try:
+                                dups = yw.check_duplicate(tx_date, amount_mu, payee)
+                                if dups:
+                                    st.session_state["dup_warnings"][dup_key] = dups
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"Duplicate check failed: {e}")
+
+                        if not st.session_state["dup_warnings"].get(dup_key) or approve_label == "Approve Anyway":
+                            if not resolved_acct_id:
+                                st.error("Account not found — select a valid account before approving.")
+                            else:
+                                try:
+                                    ynab_id = yw.post_transaction(
+                                        date=tx_date,
+                                        amount_milliunits=amount_mu,
+                                        payee=payee,
+                                        account_id=resolved_acct_id,
+                                        category_id=resolved_cat_id,
+                                        memo=memo or None,
+                                    )
+                                    pending_db.approve_transaction(tx_id, ynab_id)
+                                    st.session_state["dup_warnings"].pop(dup_key, None)
+                                    st.success(f"Posted to YNAB (id: {ynab_id})")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to post to YNAB: {e}")
+
+                with btn_col2:
+                    if st.button("Reject", key=f"reject_{tx_id}"):
+                        pending_db.reject_transaction(tx_id)
+                        st.session_state["dup_warnings"].pop(f"dups_{tx_id}", None)
+                        st.rerun()
+
+elif selected_section == "Spending Alerts":
     st.subheader("⚠️ Spending Alerts")
     st.caption(f"Category groups spending more than {ALERT_THRESHOLD:.0%} above their 3-month average last month.")
     if df_alerts.empty:

@@ -1,0 +1,67 @@
+{
+  "_comment": "Map short nicknames to exact YNAB account names. Case-insensitive on input.",
+  "_instructions": "Add or edit shortcuts here. The value must match the YNAB account name exactly. Run 'python ynab_writer.py --list-accounts' to see all account names.",
+
+  "Citibank AT&T Visa": "Citibank AT&T Visa",
+  "att": "Citibank AT&T Visa",
+  "attv": "Citibank AT&T Visa",
+  "att visa": "Citibank AT&T Visa",
+
+  "Capital One REI MasterCard": "Capital One REI MasterCard",
+  "rei": "Capital One REI MasterCard",
+  "reimc": "Capital One REI MasterCard",
+  "rei mc": "Capital One REI MasterCard",
+
+  "USAA Everyday Visa": "USAA Everyday Visa",
+  "usaa everyday": "USAA Everyday Visa",
+  "usaa e": "USAA Everyday Visa",
+  "usaae": "USAA Everyday Visa",
+  "edvisa": "USAA Everyday Visa",
+  "edv": "USAA Everyday Visa",
+
+  "USAA Autopay Visa": "USAA Autopay Visa",
+  "usaa autopay": "USAA Autopay Visa",
+  "usaa a": "USAA Autopay Visa",
+  "usaaa": "USAA Autopay Visa",
+  "aavisa": "USAA Autopay Visa",
+  "aav": "USAA Autopay Visa",
+
+  "USAA Work Visa": "USAA Work Visa",
+  "usaa work": "USAA Work Visa",
+  "usaa w": "USAA Work Visa",
+  "usaaw": "USAA Work Visa",
+  "wkvisa": "USAA Work Visa",
+  "wkv": "USAA Work Visa",
+
+  "USAA Checking": "USAA Checking",
+  "usaa check": "USAA Checking",
+  "usaa c": "USAA Checking",
+  "usaac": "USAA Checking",
+  
+  "Sophie's Checking - 0991": "Sophie's Checking - 0991",
+  "Chris's Checking - 8664": "Chris's Checking - 8664",
+  "Chris's Gifts": "Chris's Gifts",
+  "Say Hello USA": "Say Hello USA",
+  "Chris's Savings": "Chris's Savings",
+  "USAA Savings for Education *3279": "USAA Savings for Education *3279",
+  "USAA Savings for Cashflow *6918": "USAA Savings for Cashflow *6918",
+  "CapOne Savings": "CapOne Savings",
+  "BofA HSA Savings": "BofA HSA Savings",
+  "Fidelity HSA": "Fidelity HSA",
+
+  "Cash - David": "Cash - David",
+  "cash david": "Cash - David",
+  "cash d": "Cash - David",
+
+  "Cash - Michele": "Cash - Michele",
+  "cash michele": "Cash - Michele",
+  "cash m": "Cash - Michele",
+
+  "Cash - Envelope": "Cash - Envelope",
+  "Sophie's Visa": "Sophie's Visa",
+  "17008 WTR HELOC": "17008 WTR HELOC",
+  "Venmo - David": "Venmo - David",
+  "Amplify Primary Savings": "Amplify Primary Savings",
+  "Amplify HELOC": "Amplify HELOC",
+  "USAA HELOC": "USAA HELOC"
+}
