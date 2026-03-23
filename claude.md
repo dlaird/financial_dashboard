@@ -74,3 +74,43 @@ load_data(True) and load_data(False) are cached separately, so --refresh-data da
 Next logical steps discussed but not yet implemented
 
 None remaining from prior notes; all three original items are now complete
+
+=============================================================================================
+
+Session Summary — 2026-03-20
+New feature: Email-to-YNAB Transaction Pipeline
+
+New files added
+- email_poller.py: IMAP poller (polls k2udal@gmail.com). Triggers on subject containing "ynab" (case-insensitive). Parses body positionally — no keywords needed:
+    Line 1: amount
+    Line 2: account shortcut
+    Line 3: payee
+    Line 4: category shortcut
+    Line 5+: memo (optional)
+  Writes parsed transactions to pending_transactions.db. Marks emails as read after processing. Designed to run on a schedule via Windows Task Scheduler.
+- pending_db.py: SQLite helpers — insert_pending, get_pending, approve_transaction, reject_transaction. Schema: id, date, amount_milliunits, payee, account_id, account_name, category_id, category_name, memo, raw_email, status, created_at.
+- ynab_writer.py: Fetches accounts and categories from YNAB API, resolves shortcuts to IDs, checks for duplicate transactions (same date/payee/amount within 5 days), POSTs approved transactions. CLI: --list-accounts, --list-categories.
+- category_shortcuts.json: Maps short aliases (e.g. "grocs", "dining") to YNAB category names. Values use [Group] 'Name' format; resolver strips the bracket/quote wrapper automatically. Case-insensitive.
+- account_shortcuts.json: Maps short aliases (e.g. "usaae", "chase") to exact YNAB account names. Case-insensitive. Multiple shortcuts can point to the same account.
+- pending_transactions.db: SQLite database file (not committed).
+
+financial_dashboard.py changes
+- Added Pending Transactions section (now last item in sidebar nav, below Inflows)
+- Shows all pending transactions with editable fields: payee, amount, date, account (dropdown), category (dropdown), memo
+- Approve button: POSTs to YNAB via ynab_writer.py, marks record approved in DB
+- Reject button: marks record rejected in DB
+- Duplicate warning shown if a matching transaction is detected in YNAB before posting
+
+.env.example changes
+- Added GMAIL_ADDRESS, GMAIL_APP_PASSWORD, DEFAULT_YNAB_ACCOUNT
+
+Architecture notes
+- Gmail access uses IMAP with an app password (not OAuth) — simpler for a single-user personal tool
+- Phase 1 only (structured manual emails). Phase 2 (AI parsing of real-world HTML emails like utility bills) requires an Anthropic API key — not yet implemented.
+- YNAB write confirmed working via API; end-to-end save to YNAB not yet tested by user
+
+Next logical steps
+- End-to-end test: approve a pending transaction and confirm it lands in YNAB
+- Set up Windows Task Scheduler to run email_poller.py on a schedule (e.g. every 15–30 min)
+- Phase 2: parse real-world HTML emails (utility bills, Amazon invoices) using Claude API — requires Anthropic API key
+- Possibly explore auto-importing from emailed bank/credit card statements
