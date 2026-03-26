@@ -1,0 +1,6 @@
+ynab email text format
+subject:ynab
+amount
+payee
+category
+memo
