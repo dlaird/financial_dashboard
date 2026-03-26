@@ -1,0 +1,12 @@
+# Normalize all text files to LF in the repo.
+# On Windows, git will convert LF→CRLF on checkout and CRLF→LF on commit.
+* text=auto eol=lf
+
+# Explicitly binary — never touch line endings
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db  binary
+*.pdf binary
