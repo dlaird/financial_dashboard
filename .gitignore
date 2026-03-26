@@ -45,3 +45,4 @@ config_charts_dev.py
 financial_dashboard2.py
 ynab_extract_test.csv
 enhacements.md
+pending_transactions.db
