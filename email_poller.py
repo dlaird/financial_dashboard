@@ -5,21 +5,23 @@ Run on a schedule (Windows Task Scheduler) to pick up new "ynab" emails,
 parse them, and write pending transactions to pending_transactions.db.
 
 Usage:
-    python email_poller.py
+    .venv/bin/python email_poller.py
 
 Email format (Phase 1 — structured):
     Subject: ynab          (case-insensitive, just needs to contain "ynab")
     Body:
-        amount: 47.23
-        account: chase
-        payee: Whole Foods
-        category: groceries
-        memo: weekly shopping    (optional)
-        date: 2026-03-18         (optional — defaults to today)
+        47.23              (amount — required)
+        Whole Foods        (payee  — required)
+        chase              (account shortcut — required)
+        groceries          (category shortcut — required)
+        weekly shopping    (memo — optional)
+
+    Transaction date defaults to the email's sent date.
 """
 
 import imaplib
 import email
+import email.utils
 import os
 import re
 import logging
@@ -128,16 +130,16 @@ def _parse_positional(body: str) -> dict[str, str]:
     Parse a positional email body.  Lines are read top-to-bottom; blank lines ignored.
 
     Position 0: amount   (e.g. 47.23  or  $47.23)
-    Position 1: account  (shortcut or full name)
-    Position 2: payee
+    Position 1: payee
+    Position 2: account  (shortcut or full name)
     Position 3: category (shortcut or full name)
     Position 4+: memo    (all remaining lines joined as one string, optional)
     """
     lines = [l.strip() for l in body.splitlines() if l.strip()]
     result = {}
     if len(lines) > 0: result["amount"]   = lines[0]
-    if len(lines) > 1: result["account"]  = lines[1]
-    if len(lines) > 2: result["payee"]    = lines[2]
+    if len(lines) > 1: result["payee"]    = lines[1]
+    if len(lines) > 2: result["account"]  = lines[2]
     if len(lines) > 3: result["category"] = lines[3]
     if len(lines) > 4: result["memo"]     = " ".join(lines[4:])
     return result
@@ -158,10 +160,18 @@ def _parse_amount(raw: str) -> tuple[int | None, str | None]:
         return None, f"Could not parse amount: '{raw}'"
 
 
-def _parse_date(raw: str | None) -> str:
-    """Return ISO date string; defaults to today."""
-    if not raw:
+def _parse_email_date(received_at: str) -> str:
+    """Parse an RFC 2822 email Date header into an ISO date string."""
+    try:
+        return email.utils.parsedate_to_datetime(received_at).date().isoformat()
+    except Exception:
         return date_cls.today().isoformat()
+
+
+def _parse_date(raw: str | None, default: str) -> str:
+    """Return ISO date string; falls back to default (normally the email's sent date)."""
+    if not raw:
+        return default
     # Accept MM/DD/YYYY, M/D/YY, YYYY-MM-DD
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
         try:
@@ -169,13 +179,14 @@ def _parse_date(raw: str | None) -> str:
                    __import__("datetime").datetime.strptime(raw, fmt).date().isoformat()
         except ValueError:
             continue
-    return date_cls.today().isoformat()
+    return default
 
 
 def parse_phase1(raw_subject: str, raw_body: str, received_at: str) -> dict:
     """
     Parse a positional YNAB email into a pending_transaction record.
-    Line order: amount / account / payee / category / memo (optional)
+    Line order: amount / payee / account / category / memo (optional)
+    Transaction date defaults to the email's sent date.
     """
     kv = _parse_positional(raw_body)
     warnings = []
@@ -203,7 +214,8 @@ def parse_phase1(raw_subject: str, raw_body: str, received_at: str) -> dict:
 
     # --- optional fields ---
     memo = kv.get("memo", "").strip() or None
-    tx_date = _parse_date(kv.get("date"))
+    email_date = _parse_email_date(received_at)
+    tx_date = _parse_date(kv.get("date"), default=email_date)
 
     return {
         "received_at": received_at,

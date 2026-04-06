@@ -1,6 +1,9 @@
 ynab email text format
-subject:ynab
-amount
-payee
-category
-memo
+subject: ynab
+line 1: amount      (e.g. 47.23 or $47.23)
+line 2: payee       (e.g. Whole Foods)
+line 3: account     (shortcut, e.g. chase)
+line 4: category    (shortcut, e.g. groceries)
+line 5: memo        (optional)
+
+Transaction date = email sent date (no need to specify).

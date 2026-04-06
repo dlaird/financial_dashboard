@@ -150,7 +150,7 @@ st.sidebar.markdown(f"""
 _pending_count = len(pending_db.get_pending())
 _pending_label = f"Pending Transactions ({_pending_count})" if _pending_count else "Pending Transactions"
 
-sections = [
+_SECTION_KEYS = [
     "Spending Alerts",
     "Spending Breakdown",
     "Trend Analysis",
@@ -162,10 +162,21 @@ sections = [
     "Living Expense Details",
     "Travel Details",
     "Inflows",
-    _pending_label,
+    "How to Use",
+    "Pending Transactions",
 ]
+_PENDING_IDX = _SECTION_KEYS.index("Pending Transactions")
 
-selected_section = st.sidebar.radio("**Jump to Section**", sections)
+# Display labels: pending entry gets the live count; all others are unchanged
+_section_labels = _SECTION_KEYS[:-1] + [_pending_label]
+
+if "nav_idx" not in st.session_state:
+    st.session_state["nav_idx"] = 0
+
+_selected_label = st.sidebar.radio("**Jump to Section**", _section_labels, index=st.session_state["nav_idx"])
+_selected_display_idx = _section_labels.index(_selected_label)
+st.session_state["nav_idx"] = _selected_display_idx
+selected_section = _SECTION_KEYS[_selected_display_idx]
 
 @st.cache_data(ttl=300)
 def _ynab_accounts():
@@ -181,7 +192,7 @@ def _ynab_categories():
     except Exception:
         return []
 
-if selected_section == _pending_label:
+if selected_section == "Pending Transactions":
     st.subheader("📬 Pending Transactions")
     st.caption("Transactions parsed from email — review, edit, then approve or reject.")
 
@@ -258,6 +269,7 @@ if selected_section == _pending_label:
                                 dups = yw.check_duplicate(tx_date, amount_mu, payee)
                                 if dups:
                                     st.session_state["dup_warnings"][dup_key] = dups
+                                    st.session_state["nav_idx"] = _PENDING_IDX
                                     st.rerun()
                             except Exception as e:
                                 st.error(f"Duplicate check failed: {e}")
@@ -278,6 +290,7 @@ if selected_section == _pending_label:
                                     pending_db.approve_transaction(tx_id, ynab_id)
                                     st.session_state["dup_warnings"].pop(dup_key, None)
                                     st.success(f"Posted to YNAB (id: {ynab_id})")
+                                    st.session_state["nav_idx"] = _PENDING_IDX
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Failed to post to YNAB: {e}")
@@ -286,6 +299,7 @@ if selected_section == _pending_label:
                     if st.button("Reject", key=f"reject_{tx_id}"):
                         pending_db.reject_transaction(tx_id)
                         st.session_state["dup_warnings"].pop(f"dups_{tx_id}", None)
+                        st.session_state["nav_idx"] = _PENDING_IDX
                         st.rerun()
 
 elif selected_section == "Spending Alerts":
@@ -510,6 +524,123 @@ elif selected_section == "Basic Expenses":
 
 elif selected_section == "Inflows":
     dh.render_chart_pair("Inflow Category Groups", key_prefix="inflow", charts=charts)
+
+elif selected_section == "How to Use":
+    st.subheader("How to Use This Dashboard")
+
+    st.markdown("### Overview")
+    st.markdown("""
+This dashboard pulls your transaction data from **YNAB** and adds the analytical views that YNAB's built-in reports don't provide:
+trend detection, deviation alerts, drillable spending breakdowns, and a quick-entry pipeline for logging transactions by email.
+
+YNAB categories are named to match the groups used by your financial advisor's **Right Capital** plan.
+The $8,000/month target line on the Living Expenses chart comes directly from that plan.
+""")
+
+    st.markdown("---")
+    st.markdown("### Sections")
+    st.markdown("""
+| Section | What it shows |
+|---|---|
+| **Spending Alerts** | Category groups spending >20% above their 3-month average last month. Includes transaction drill-down. |
+| **Spending Breakdown** | Drillable sunburst / treemap / icicle charts by supergroup → group → category → payee, plus a transaction table. |
+| **Trend Analysis** | Deviation bubble chart (recent vs. historical) and a monthly heatmap by category group. |
+| **Payee Cleanup** | Top payees by volume and groups of likely name variants to standardize in YNAB. |
+| **Expense Super Groups** | Bar/line charts for Living Expenses, Goals, and Basic Expenses rolled up. |
+| **Living Expenses** | Charts for each Living Expenses category group with the Right Capital $8K target line. |
+| **Goals** | Charts and summary table for goal-related spending. |
+| **Basic Expenses** | Charts and summary table for fixed/recurring expenses. |
+| **Living Expense Details** | Month-by-month summary table with 3-month average and % deviation columns. |
+| **Travel Details** | Same summary table scoped to the Travel goal group. |
+| **Inflows** | Income and transfer inflows over time. |
+| **Pending Transactions** | Review and approve transactions submitted by email before they post to YNAB. |
+""")
+
+    st.markdown("---")
+    st.markdown("### Refreshing Data")
+    st.markdown("""
+By default the dashboard reads from the local `ynab_extract.csv` cache.
+To pull fresh data from YNAB, restart with the `--refresh-data` flag:
+
+```bash
+.venv/bin/python -m streamlit run financial_dashboard.py -- --refresh-data
+```
+""")
+
+    st.markdown("---")
+    st.markdown("### Logging Transactions by Email (Email-to-YNAB Pipeline)")
+    st.markdown("""
+You can add a YNAB transaction by sending a plain-text email to **k2udal@gmail.com**.
+
+**Subject line:** anything containing `ynab` (case-insensitive)
+
+**Body — one item per line, in this order:**
+
+| Line | Field | Example |
+|---|---|---|
+| 1 | Amount | `47.23` or `$47.23` |
+| 2 | Payee | `Whole Foods` |
+| 3 | Account shortcut | `chase` |
+| 4 | Category shortcut | `groceries` |
+| 5+ | Memo (optional) | `weekly shopping` |
+
+The transaction date is taken from the email's sent timestamp — no need to specify it.
+
+**Example email body:**
+```
+47.23
+Whole Foods
+chase
+groceries
+weekly shopping
+```
+
+The email poller checks Gmail for unread messages matching the subject trigger and writes parsed transactions
+to the Pending Transactions queue. Open the **Pending Transactions** section to review, edit, and approve
+before posting to YNAB.
+""")
+
+    st.markdown("---")
+    st.markdown("### Running the Email Poller")
+    st.markdown("""
+**Run once manually** (Linux / WSL):
+```bash
+.venv/bin/python email_poller.py
+```
+
+**Run once manually** (Windows PowerShell):
+```powershell
+.venv\\Scripts\\python.exe email_poller.py
+```
+
+Progress and any parse errors are written to `email_poller.log` in the project folder.
+
+**Run on a schedule — Linux cron (every 15 min):**
+```
+*/15 * * * * /path/to/financial_dashboard/.venv/bin/python /path/to/financial_dashboard/email_poller.py
+```
+
+**Run on a schedule — Windows Task Scheduler:**
+- Program: `.venv\\Scripts\\python.exe`
+- Arguments: `email_poller.py`
+- Start in: `C:\\path\\to\\financial_dashboard`
+- Trigger: repeat every 15 minutes
+""")
+
+    st.markdown("---")
+    st.markdown("### Account & Category Shortcuts")
+    st.markdown("""
+Shortcuts are defined in two JSON files in the project folder:
+
+- `account_shortcuts.json` — maps aliases like `chase`, `usaa` to exact YNAB account names
+- `category_shortcuts.json` — maps aliases like `groceries`, `dining` to YNAB category names
+
+Shortcuts are case-insensitive. To see all available shortcuts, run:
+```bash
+.venv/bin/python ynab_writer.py --list-accounts
+.venv/bin/python ynab_writer.py --list-categories
+```
+""")
 
 elif selected_section == "Living Expense Details":
     st.subheader("🏠 Living Expenses Details")

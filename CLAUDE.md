@@ -114,3 +114,52 @@ Next logical steps
 - Set up Windows Task Scheduler to run email_poller.py on a schedule (e.g. every 15–30 min)
 - Phase 2: parse real-world HTML emails (utility bills, Amazon invoices) using Claude API — requires Anthropic API key
 - Possibly explore auto-importing from emailed bank/credit card statements
+
+=============================================================================================
+
+Session Summary — 2026-04-06
+Fixes and enhancements implemented
+
+email_poller.py
+- Changed email field order to: amount / payee / account / category / memo (payee and account swapped)
+- Transaction date now defaults to the email's sent date (RFC 2822 Date header) instead of today's date
+- Added _parse_email_date() helper using email.utils.parsedate_to_datetime
+- _parse_date() now takes a default parameter instead of hardcoding date_cls.today()
+- Updated module docstring to reflect new field order and date behavior
+- Fixed usage line in docstring: python → .venv/bin/python
+
+financial_dashboard.py
+- Fixed post-action navigation: after approve, reject, or duplicate-check rerun, dashboard now stays on
+  Pending Transactions instead of jumping back to Spending Alerts
+  - Sidebar nav selection is persisted as an index (st.session_state["nav_idx"]) rather than by label value
+  - All three st.rerun() calls in the pending section set nav_idx to the Pending Transactions index first
+  - _pending_label (which includes a live count) is the display label only; canonical key "Pending Transactions"
+    is used for section routing, so label changes on rerun don't break selection
+- Added "How to Use" section to sidebar nav (between Inflows and Pending Transactions) covering:
+  - Dashboard overview and Right Capital context
+  - Table of all sections with descriptions
+  - How to refresh data (--refresh-data flag)
+  - Email-to-YNAB pipeline instructions (field order, example email body)
+  - Running the poller manually (Linux/WSL and Windows commands)
+  - Scheduling the poller via cron or Windows Task Scheduler
+  - Account and category shortcuts reference
+
+README.md
+- Fixed poller run commands: python → .venv/bin/python (Linux) and .venv\Scripts\python.exe (Windows)
+
+requirements.txt (new file)
+- Added to repo; includes openpyxl==3.1.5 (required by pandas .to_excel in ynab_data_pipeline.py)
+
+ynab email text format.txt
+- Updated to reflect new field order: amount / payee / account / category / memo
+- Added note that transaction date = email sent date
+
+Architecture notes
+- Email field order is now: amount / payee / account / category / memo (matches user's mental model)
+- Nav index persistence pattern: store index in session_state, set before any st.rerun(); display labels
+  (which may include dynamic counts) are decoupled from routing keys
+
+Next logical steps
+- End-to-end test: approve a pending transaction and confirm it lands in YNAB
+- Set up scheduled poller (cron or Windows Task Scheduler)
+- Phase 2: parse real-world HTML emails using Claude API — requires Anthropic API key
