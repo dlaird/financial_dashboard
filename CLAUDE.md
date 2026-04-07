@@ -242,3 +242,5 @@ Next logical steps
 - Inline log output from "Check for New Transactions" button not yet shown in UI (visible in
   terminal only) — possible future enhancement
 - Add more senders to phase2_sources.json as needed (see How to Use for instructions)
+- start_dashboard.sh (tmux-based): created but not yet working from Windows SSH terminal;
+  may not be worth pursuing since VS Code terminal works fine for normal use
