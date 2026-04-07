@@ -1,0 +1,44 @@
+{
+  "_comment": "Phase 2 email parsing config. trusted_forwarders are the Gmail addresses allowed to forward bills. sender_rules match the original sender of the forwarded email.",
+
+  "trusted_forwarders": {
+    "k2udal@gmail.com": "D",
+    "dalairds@gmail.com": "D",
+    "mbdvol@gmail.com": "M"
+  },
+
+  "sender_rules": [
+    {
+      "_comment": "Amazon order confirmations",
+      "domain": "amazon.com",
+      "payee": "Amazon",
+      "account": "evisa"
+    },
+    {
+      "_comment": "Whole Foods (Amazon-owned, separate sender)",
+      "domain": "wholefoodsmarket.com",
+      "payee": "Whole Foods",
+      "account": "evisa"
+    },
+    {
+      "_comment": "City of Austin electric/utility bill — matches on sender name since domain varies",
+      "name_contains": "city of austin utilities",
+      "payee": "City of Austin Utilities",
+      "account": "usaac"
+    },
+    {
+      "_comment": "West Travis County water bill — sent via InvoiceCloud billing service",
+      "name_contains": "west travis county",
+      "domain": "invoicecloud.net",
+      "payee": "West Travis County PUD",
+      "account": "usaac"
+    },
+    {
+      "_comment": "Anthropic, Claude Code and API",
+      "name_contains": "anthropic",
+      "domain": "mail.anthropic.com",
+      "payee": "Anthropic",
+      "account": "usaae"
+    }
+  ]
+}

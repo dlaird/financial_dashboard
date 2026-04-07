@@ -390,6 +390,26 @@ def make_bubble_chart(df, windows, first_of_year, last_month):
     return fig
 
 
+def apply_demo_scramble(df):
+    """Scramble amounts and payee names for demo/presentation mode.
+
+    Each category gets a stable random scale factor (0.55–1.45×) derived from
+    a fixed seed, so numbers stay consistent while you interact with the
+    dashboard.  Payee names are replaced with generic "Vendor NNN" labels.
+    """
+    df = df.copy()
+    rng = np.random.default_rng(seed=42)
+    categories = sorted(df["category_name"].dropna().unique())
+    scale = {cat: rng.uniform(0.55, 1.45) for cat in categories}
+    df["amount"] = df.apply(
+        lambda r: r["amount"] * scale.get(r["category_name"], 1.0), axis=1
+    )
+    payees = sorted(df["payee_name"].dropna().unique())
+    payee_map = {p: f"Vendor {i + 1:03d}" for i, p in enumerate(payees)}
+    df["payee_name"] = df["payee_name"].map(payee_map).fillna("Unknown")
+    return df
+
+
 def get_time_anchors():
     today = pd.Timestamp.today()
     first_of_month = today.replace(day=1)

@@ -33,16 +33,27 @@ _args, _ = _parser.parse_known_args()
 refresh_data = _args.refresh_data
 
 @st.cache_data
-def load_data(refresh):
+def load_data(refresh, demo=False):
     if refresh:
-        return get_ynab_data()
-    df = pd.read_csv("ynab_extract.csv")
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = get_ynab_data()
+    else:
+        df = pd.read_csv("ynab_extract.csv")
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if demo:
+        df = dh.apply_demo_scramble(df)
     return df
 
-df = load_data(refresh_data)
+demo_mode = st.session_state.get("demo_mode", False)
+df = load_data(refresh_data, demo_mode)
 
-### grouping 
+today, first_of_month, last_month, first_of_year, windows = dh.get_time_anchors()
+
+# df_analytics: capped at end of last full month — used for charts and summaries
+# so a partial current month never distorts bars or averages.
+# df (full): used for transaction-level drill-downs where you want to see recent activity.
+df_analytics = df[df["date"] < first_of_month].copy()
+
+### grouping
 ### summarizing transaction data by summing amounts by:
 ###   category_supergroup (e.g.,Basic Expenses, Goals, Living Expenses)
 ###   category_group (e.g., Health Care, Travel, Insurance)
@@ -69,7 +80,7 @@ df_pyn_monthly = dh.group_sum(df,["month", "category_name", "payee_name"])
 df_pyn_yearly = dh.group_sum(df,["year", "category_name", "payee_name"])
 
 @st.cache_data
-def build_static_charts(df):
+def build_static_charts(df, demo=False):
     agg = {
         "df_sgrp_monthly": dh.group_sum(df, ["month", "category_supergroup"]),
         "df_sgrp_yearly":  dh.group_sum(df, ["year",  "category_supergroup"]),
@@ -89,16 +100,15 @@ def build_static_charts(df):
                 sorted_df, chart_type, spec["time_col"], "amount",
                 spec["color_col"], spec["title"][i], force_year_ticks=spec["force_year_ticks"][i]
             )
-    charts["living_expenses_group_bar"].add_hline(
-        y=8000, line_dash="solid", line_color="black",
-        annotation_text="Right Capital Target", annotation_position="top left",
-        annotation_font=dict(family="Arial Black", size=12, color="brown")
-    )
+    if not demo:
+        charts["living_expenses_group_bar"].add_hline(
+            y=8000, line_dash="solid", line_color="black",
+            annotation_text="Right Capital Target", annotation_position="top left",
+            annotation_font=dict(family="Arial Black", size=12, color="brown")
+        )
     return charts
 
-charts = build_static_charts(df)
-
-today, first_of_month, last_month, first_of_year, windows = dh.get_time_anchors()
+charts = build_static_charts(df_analytics, demo_mode)
 
 @st.cache_data
 def compute_summaries(df, windows, first_of_year, last_month):
@@ -112,7 +122,7 @@ def compute_summaries(df, windows, first_of_year, last_month):
     )
 
 (df_cl_living_summary, df_cl_travel_summary, df_cl_goals_summary,
- df_cl_basic_summary, df_alerts_raw) = compute_summaries(df, windows, first_of_year, last_month)
+ df_cl_basic_summary, df_alerts_raw) = compute_summaries(df_analytics, windows, first_of_year, last_month)
 
 df_alerts = df_alerts_raw[df_alerts_raw["pct_ch_3m"].notna() & (df_alerts_raw["pct_ch_3m"] > ALERT_THRESHOLD)].sort_values("pct_ch_3m", ascending=False)
 
@@ -131,9 +141,15 @@ st.markdown("""<style>
 </style>""", unsafe_allow_html=True)
 ### data bits to add to heading
 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-hostname = socket.gethostname()
-ip_address = socket.gethostbyname(hostname)
 port = 8501  # default Streamlit port
+try:
+    # Connect to an external address (doesn't send data) to find the real LAN IP
+    _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    _s.connect(("8.8.8.8", 80))
+    ip_address = _s.getsockname()[0]
+    _s.close()
+except Exception:
+    ip_address = socket.gethostbyname(socket.gethostname())
 
 with st.container():
     st.title("Spending Dashboard")
@@ -146,6 +162,10 @@ st.sidebar.markdown(f"""
 **{timestamp}**\n
 **Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
 """)
+
+st.sidebar.checkbox("Demo Mode", key="demo_mode", help="Scrambles amounts and payee names for safe screen-sharing.")
+if demo_mode:
+    st.sidebar.error("DEMO MODE — numbers are not real")
 
 _pending_count = len(pending_db.get_pending())
 _pending_label = f"Pending Transactions ({_pending_count})" if _pending_count else "Pending Transactions"
@@ -195,6 +215,23 @@ def _ynab_categories():
 if selected_section == "Pending Transactions":
     st.subheader("📬 Pending Transactions")
     st.caption("Transactions parsed from email — review, edit, then approve or reject.")
+
+    if st.button("Check for New Transactions", icon="📧"):
+        import email_poller
+        import io, logging
+        buf = io.StringIO()
+        handler = logging.StreamHandler(buf)
+        handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(handler)
+        try:
+            email_poller.run()
+        finally:
+            logging.getLogger().removeHandler(handler)
+        output = buf.getvalue().strip()
+        if output:
+            st.code(output)
+        st.session_state["nav_idx"] = _PENDING_IDX
+        st.rerun()
 
     pending = pending_db.get_pending()
     if not pending:
@@ -313,6 +350,7 @@ elif selected_section == "Spending Alerts":
 
         st.markdown("---")
         st.markdown("#### Drill Down")
+        st.caption(f"Alerts based on {last_month.strftime('%B %Y')}. Transaction tables below include data through today.")
         month_label = last_month.strftime("%B %Y")
         alert_groups = df_alerts["category_name"].tolist()  # category_name column holds category_group values here
         selected_group = st.selectbox("Select a category group to inspect", alert_groups, key="alert_drilldown")
@@ -372,6 +410,7 @@ elif selected_section == "Spending Breakdown":
     with col_yr:
         years = sorted(df["year"].dropna().unique().tolist(), reverse=True)
         selected_year = st.selectbox("Select Year", ["All"] + years, key="sb_year")
+    st.caption(f"Charts show data through {last_month.strftime('%B %Y')} (last full month). Transaction tab includes data through today.")
     with col_sg:
         selected_sg = st.selectbox(
             "Select Supergroup",
@@ -381,11 +420,11 @@ elif selected_section == "Spending Breakdown":
 
     tab_sun, tab_tree, tab_ice, tab_tx = st.tabs(["Sunburst", "Treemap", "Icicle", "Transactions"])
     with tab_sun:
-        st.plotly_chart(dh.make_hierarchy_chart(df, "sunburst", selected_year, selected_sg), width='stretch', key=f"sun_{selected_year}_{selected_sg}")
+        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "sunburst", selected_year, selected_sg), width='stretch', key=f"sun_{selected_year}_{selected_sg}")
     with tab_tree:
-        st.plotly_chart(dh.make_hierarchy_chart(df, "treemap", selected_year, selected_sg), width='stretch', key=f"tree_{selected_year}_{selected_sg}")
+        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "treemap", selected_year, selected_sg), width='stretch', key=f"tree_{selected_year}_{selected_sg}")
     with tab_ice:
-        st.plotly_chart(dh.make_hierarchy_chart(df, "icicle", selected_year, selected_sg), width='stretch', key=f"ice_{selected_year}_{selected_sg}")
+        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "icicle", selected_year, selected_sg), width='stretch', key=f"ice_{selected_year}_{selected_sg}")
 
     with tab_tx:
         st.markdown("#### Transaction Drill-Down")
@@ -451,18 +490,18 @@ elif selected_section == "Trend Analysis":
 
     with tab_bubble:
         st.caption("Each bubble is a category group. Right = higher avg spend. Up = recent spike vs 3-month avg. Size = YTD total.")
-        st.plotly_chart(dh.make_bubble_chart(df, windows, first_of_year, last_month), width='stretch')
+        st.plotly_chart(dh.make_bubble_chart(df_analytics, windows, first_of_year, last_month), width='stretch')
 
     with tab_heat:
         st.caption("Color shows each month vs that category's own average. Red = above avg, green = below. Hover for actual $.")
         supergroups = ["All", "Living Expenses", "Goals", "Basic Expenses"]
-        years = sorted(df["year"].dropna().unique().tolist(), reverse=True)
+        years = sorted(df_analytics["year"].dropna().unique().tolist(), reverse=True)
         col_sg, col_yr = st.columns(2)
         with col_sg:
             selected_sg = st.selectbox("Filter by Supergroup", supergroups, key="heatmap_sg")
         with col_yr:
             selected_yr = st.selectbox("Filter by Year", ["All"] + years, key="heatmap_yr")
-        st.plotly_chart(dh.make_heatmap(df, supergroup=selected_sg, year=selected_yr), width='stretch')
+        st.plotly_chart(dh.make_heatmap(df_analytics, supergroup=selected_sg, year=selected_yr), width='stretch')
 
 elif selected_section == "Payee Cleanup":
     st.subheader("Payee Cleanup")
@@ -568,7 +607,7 @@ To pull fresh data from YNAB, restart with the `--refresh-data` flag:
 """)
 
     st.markdown("---")
-    st.markdown("### Logging Transactions by Email (Email-to-YNAB Pipeline)")
+    st.markdown("### Logging Transactions by Email — Phase 1 (Manual Entry)")
     st.markdown("""
 You can add a YNAB transaction by sending a plain-text email to **k2udal@gmail.com**.
 
@@ -601,30 +640,16 @@ before posting to YNAB.
 """)
 
     st.markdown("---")
-    st.markdown("### Running the Email Poller")
+    st.markdown("### Checking for New Transactions")
     st.markdown("""
-**Run once manually** (Linux / WSL):
-```bash
-.venv/bin/python email_poller.py
-```
+Click **Check for New Transactions** at the top of the **Pending Transactions** section.
+This runs the email poller on demand — no scheduled background process needed.
 
-**Run once manually** (Windows PowerShell):
-```powershell
-.venv\\Scripts\\python.exe email_poller.py
-```
+The poller checks Gmail for unread emails from trusted senders, parses them (Phase 1 or
+Phase 2 depending on the subject), and adds results to the pending queue. The page
+refreshes automatically when it's done.
 
-Progress and any parse errors are written to `email_poller.log` in the project folder.
-
-**Run on a schedule — Linux cron (every 15 min):**
-```
-*/15 * * * * /path/to/financial_dashboard/.venv/bin/python /path/to/financial_dashboard/email_poller.py
-```
-
-**Run on a schedule — Windows Task Scheduler:**
-- Program: `.venv\\Scripts\\python.exe`
-- Arguments: `email_poller.py`
-- Start in: `C:\\path\\to\\financial_dashboard`
-- Trigger: repeat every 15 minutes
+Progress and any errors are also written to `email_poller.log` in the project folder.
 """)
 
     st.markdown("---")
@@ -632,14 +657,73 @@ Progress and any parse errors are written to `email_poller.log` in the project f
     st.markdown("""
 Shortcuts are defined in two JSON files in the project folder:
 
-- `account_shortcuts.json` — maps aliases like `chase`, `usaa` to exact YNAB account names
-- `category_shortcuts.json` — maps aliases like `groceries`, `dining` to YNAB category names
+- `account_shortcuts.json` — maps aliases like `evisa`, `usaac` to exact YNAB account names
+- `category_shortcuts.json` — maps aliases like `grocs`, `dining` to YNAB category names
 
 Shortcuts are case-insensitive. To see all available shortcuts, run:
 ```bash
 .venv/bin/python ynab_writer.py --list-accounts
 .venv/bin/python ynab_writer.py --list-categories
 ```
+""")
+
+    st.markdown("---")
+    st.markdown("### AI Bill & Receipt Processing (Phase 2)")
+    st.markdown("""
+Forwarded emails from known senders (Amazon, Whole Foods, utility companies) are
+automatically parsed by Claude AI and added to the Pending Transactions queue.
+
+**How it works:**
+- Forward the bill or receipt email to **k2udal@gmail.com** — do **not** include `ynab` in the subject
+- The poller detects the original sender, passes the email to Claude, and creates one pending
+  transaction per order or charge
+- Memo is prefixed with **D:** (David) or **M:** (Michele) based on who forwarded it
+- Review and approve in the **Pending Transactions** section as usual
+
+**Currently configured senders:**
+| Sender | Payee | Account |
+|---|---|---|
+| amazon.com | Amazon | USAA Everyday Visa |
+| wholefoodsmarket.com | Whole Foods | USAA Everyday Visa |
+| City of Austin Utilities | City of Austin Utilities | USAA Checking |
+| West Travis County PUD (via invoicecloud.net) | West Travis County PUD | USAA Checking |
+
+**Adding a new sender:**
+
+1. Forward one of their emails to k2udal@gmail.com (no `ynab` in subject)
+2. Run the poller — it will log the exact From line:
+   ```
+   No sender rule for forwarded-from 'Acme Corp <billing@acme.com>' — skipping.
+   ```
+3. Add an entry to `phase2_sources.json` under `sender_rules`:
+
+| Situation | Field to use | Example |
+|---|---|---|
+| Sender has a recognizable domain | `"domain"` | `"domain": "acme.com"` |
+| Sender uses a billing service (e.g. InvoiceCloud) | `"name_contains"` | `"name_contains": "acme corp"` |
+| Single specific address | `"address"` | `"address": "bills@acme.com"` |
+
+Example entry:
+```json
+{
+  "name_contains": "acme corp",
+  "payee": "Acme Corp",
+  "account": "usaac"
+}
+```
+4. Mark the email unread in Gmail and run the poller again.
+""")
+
+    st.markdown("---")
+    st.markdown("### Demo Mode")
+    st.markdown("""
+Toggle **Demo Mode** in the sidebar to scramble all dollar amounts and replace payee names
+with generic labels (Vendor 001, Vendor 002, etc.). Use this when screen-sharing the
+dashboard with someone you don't want to see your real financial data.
+
+- Spending trends and chart shapes are preserved — the dashboard still makes sense to viewers
+- The Right Capital $8,000 target line is hidden in demo mode
+- Numbers are stable while you interact (toggling off restores real data instantly)
 """)
 
 elif selected_section == "Living Expense Details":

@@ -1,3 +1,8 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -44,5 +49,4 @@ ynab_extract - Copy.xlsx
 config_charts_dev.py
 financial_dashboard2.py
 ynab_extract_test.csv
-enhacements.md
 pending_transactions.db

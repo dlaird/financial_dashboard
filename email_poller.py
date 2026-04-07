@@ -22,6 +22,7 @@ Email format (Phase 1 — structured):
 import imaplib
 import email
 import email.utils
+import json
 import os
 import re
 import logging
@@ -48,6 +49,42 @@ IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
 SUBJECT_TRIGGER = "ynab"   # case-insensitive; subject just needs to contain this
 
+_SOURCES_PATH = os.path.join(os.path.dirname(__file__), "phase2_sources.json")
+
+def _load_sources() -> dict:
+    with open(_SOURCES_PATH) as f:
+        return json.load(f)
+
+
+def _match_sender_rule(original_from: str, rules: list[dict]) -> dict | None:
+    """Return the first rule whose domain, address, or name_contains matches original_from."""
+    addr = original_from.lower()
+    for rule in rules:
+        if "address" in rule and rule["address"].lower() in addr:
+            return rule
+        if "domain" in rule and rule["domain"].lower() in addr:
+            return rule
+        if "name_contains" in rule and rule["name_contains"].lower() in addr:
+            return rule
+    return None
+
+
+def _extract_forwarded_from(body: str) -> str:
+    """
+    Extract the original sender line from a Gmail forwarded message block.
+    Gmail format: '---------- Forwarded message ---------\nFrom: Name <addr@domain.com>'
+    The From line may wrap across two lines when the address is long.
+    """
+    match = re.search(
+        r"[-]{5,}\s*Forwarded message\s*[-]{5,}.*?From:\s*(.+?)(?=\n\S|\Z)",
+        body,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        # Collapse any line wrapping inside the From value
+        return " ".join(match.group(1).split())
+    return ""
+
 
 # ---------------------------------------------------------------------------
 # IMAP helpers
@@ -64,45 +101,97 @@ def _decode_header_value(raw) -> str:
     return "".join(decoded)
 
 
+def _html_to_lines(html: str) -> str:
+    """Convert an HTML body to newline-separated plain text.
+    Replaces <br> and block-level tags with newlines, then strips all tags."""
+    import re
+    text = re.sub(r"<br\s*/?>", "\n", html, flags=re.IGNORECASE)
+    text = re.sub(r"</(p|div|li|tr|h[1-6])>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    import html as html_module
+    return html_module.unescape(text)
+
+
 def _get_body(msg) -> str:
-    """Extract plain-text body from an email message."""
+    """Extract plain-text body from an email message.
+
+    Prefers text/plain; falls back to parsing text/html when Gmail (and other
+    clients) collapse multiple lines into a single space-separated line in the
+    plain-text part.
+    """
+    plain, html_body = None, None
+
     if msg.is_multipart():
         for part in msg.walk():
             ct = part.get_content_type()
             disp = str(part.get("Content-Disposition", ""))
-            if ct == "text/plain" and "attachment" not in disp:
-                charset = part.get_content_charset() or "utf-8"
-                return part.get_payload(decode=True).decode(charset, errors="replace")
+            if "attachment" in disp:
+                continue
+            raw = part.get_payload(decode=True)
+            if raw is None:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            payload = raw.decode(charset, errors="replace")
+            if ct == "text/plain" and plain is None:
+                plain = payload
+            elif ct == "text/html" and html_body is None:
+                html_body = payload
     else:
         charset = msg.get_content_charset() or "utf-8"
-        return msg.get_payload(decode=True).decode(charset, errors="replace")
-    return ""
+        plain = msg.get_payload(decode=True).decode(charset, errors="replace")
+
+    # Use plain text if it contains more than one non-empty line; otherwise
+    # fall back to the HTML part (Gmail often collapses lines in text/plain).
+    if plain:
+        non_empty = [l for l in plain.splitlines() if l.strip()]
+        if len(non_empty) > 1:
+            return plain
+
+    if html_body:
+        return _html_to_lines(html_body)
+
+    return plain or ""
 
 
 def fetch_ynab_emails() -> list[dict]:
     """
-    Connect to Gmail via IMAP, fetch unread emails whose subject contains
-    SUBJECT_TRIGGER, mark them as read, and return raw email dicts.
+    Connect to Gmail via IMAP and fetch all unread emails from trusted forwarders.
+    Phase 1 emails have SUBJECT_TRIGGER in the subject.
+    Phase 2 emails are forwarded bills/receipts from any trusted forwarder address.
+    All fetched emails are marked as read.
     """
     gmail_user = os.getenv("GMAIL_ADDRESS")
     gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
     if not gmail_user or not gmail_pass:
         raise ValueError("GMAIL_ADDRESS and GMAIL_APP_PASSWORD must be set in .env")
 
+    sources = _load_sources()
+    trusted = {addr.lower() for addr in sources.get("trusted_forwarders", {}).keys()}
+
     results = []
     with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as imap:
         imap.login(gmail_user, gmail_pass)
         imap.select("INBOX")
 
-        # Search for unread emails with "ynab" in the subject (case-insensitive)
-        _, msg_ids = imap.search(None, f'(UNSEEN SUBJECT "{SUBJECT_TRIGGER}")')
+        since = (date_cls.today().replace(day=1) - __import__("datetime").timedelta(days=1)).replace(day=1)
+        since_str = since.strftime("%d-%b-%Y")  # IMAP format: 01-Mar-2026
+        _, msg_ids = imap.search(None, f'(UNSEEN SINCE "{since_str}")')
         ids = msg_ids[0].split()
-        log.info(f"Found {len(ids)} unread YNAB email(s).")
+        log.info(f"Found {len(ids)} unread email(s) since {since_str}.")
 
         for msg_id in ids:
             _, data = imap.fetch(msg_id, "(RFC822)")
             raw = data[0][1]
             msg = email.message_from_bytes(raw)
+
+            from_raw = _decode_header_value(msg.get("From", ""))
+            from_addr = re.search(r"[\w.\-+]+@[\w.\-]+", from_raw)
+            from_addr = from_addr.group(0).lower() if from_addr else ""
+
+            # Only process emails from trusted forwarders
+            if from_addr not in trusted:
+                log.info(f"Skipping email from untrusted sender: {from_addr!r}")
+                continue
 
             subject = _decode_header_value(msg.get("Subject", ""))
             body = _get_body(msg)
@@ -112,12 +201,13 @@ def fetch_ynab_emails() -> list[dict]:
                 "raw_subject": subject,
                 "raw_body": body,
                 "received_at": received,
+                "from_addr": from_addr,
                 "msg_id": msg_id,
             })
 
-            # Mark as read
             imap.store(msg_id, "+FLAGS", "\\Seen")
 
+    log.info(f"Processing {len(results)} email(s) from trusted forwarders.")
     return results
 
 
@@ -238,6 +328,14 @@ def parse_phase1(raw_subject: str, raw_body: str, received_at: str) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
+def _log_inserted(record: dict, tx_id: int) -> None:
+    log.info(
+        f"Inserted pending tx #{tx_id}: "
+        f"{record.get('payee')} ${abs((record.get('amount_milliunits') or 0) / 1000):.2f}"
+        + (f" [warnings: {record['parse_warnings']}]" if record.get("parse_warnings") else "")
+    )
+
+
 def run():
     log.info("Email poller starting.")
     try:
@@ -246,19 +344,59 @@ def run():
         log.error(f"Failed to fetch emails: {e}")
         return
 
+    sources = _load_sources()
+    trusted_forwarders = sources.get("trusted_forwarders", {})  # {addr: prefix}
+    sender_rules = sources.get("sender_rules", [])
+
     inserted = 0
     for em in emails:
+        subject = em["raw_subject"]
+        body = em["raw_body"]
+        received = em["received_at"]
+        from_addr = em["from_addr"]
+
         try:
-            record = parse_phase1(em["raw_subject"], em["raw_body"], em["received_at"])
-            tx_id = pending_db.insert_pending(record)
-            log.info(
-                f"Inserted pending tx #{tx_id}: "
-                f"{record.get('payee')} ${abs((record.get('amount_milliunits') or 0) / 1000):.2f}"
-                + (f" [warnings: {record['parse_warnings']}]" if record.get("parse_warnings") else "")
-            )
-            inserted += 1
+            if SUBJECT_TRIGGER in subject.lower():
+                # ── Phase 1: structured manual email ──────────────────────────
+                record = parse_phase1(subject, body, received)
+                tx_id = pending_db.insert_pending(record)
+                _log_inserted(record, tx_id)
+                inserted += 1
+
+            else:
+                # ── Phase 2: forwarded bill / receipt ─────────────────────────
+                import phase2_parser as p2
+
+                forwarded_from = _extract_forwarded_from(body)
+                rule = _match_sender_rule(forwarded_from, sender_rules)
+                if not rule:
+                    log.info(f"No sender rule for forwarded-from '{forwarded_from}' — skipping.")
+                    continue
+
+                forwarder_prefix = trusted_forwarders.get(from_addr, "?")
+                payee_hint = rule.get("payee", "")
+
+                log.info(f"Phase 2: extracting from '{payee_hint}' email forwarded by {from_addr}.")
+                extracted = p2.extract_transactions(body, payee_hint=payee_hint)
+                if not extracted:
+                    log.warning(f"Claude returned no transactions for subject: '{subject}'")
+                    continue
+
+                records = p2.build_pending_records(
+                    extracted=extracted,
+                    rule=rule,
+                    forwarder_prefix=forwarder_prefix,
+                    raw_subject=subject,
+                    raw_body=body,
+                    received_at=received,
+                )
+                for record in records:
+                    tx_id = pending_db.insert_pending(record)
+                    _log_inserted(record, tx_id)
+                    inserted += 1
+
         except Exception as e:
-            log.error(f"Failed to process email '{em['raw_subject']}': {e}")
+            log.error(f"Failed to process email '{subject}': {e}", exc_info=True)
 
     log.info(f"Done. {inserted} transaction(s) queued.")
 

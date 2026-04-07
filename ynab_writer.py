@@ -91,7 +91,7 @@ def category_name_to_id(name: str) -> tuple[str | None, str | None]:
     """
     name_lower = name.lower().strip()
     for cat in get_categories():
-        if cat["name"].lower() == name_lower:
+        if cat["name"].lower().strip() == name_lower:
             return cat["id"], cat["name"]
     return None, None
 
