@@ -39,6 +39,43 @@
       "domain": "mail.anthropic.com",
       "payee": "Anthropic",
       "account": "usaae"
+    },
+   {
+      "_comment": "Home Depot",
+      "name_contains": "Home Depot",
+      "domain": "homedepot.com",
+      "payee": "Home Depot",
+      "account": "usaae"
+    },
+   {
+      "_comment": "Venmo, various payees, sent via venmo.com domain",
+      "name_contains": "Venmo",
+      "domain": "venmo.com",
+      "payee": "Venmo",
+      "account": "usaac",
+      "_payee_rules_comment": "Maps extracted payee name (case-insensitive) to category shortcut and display payee name",
+      "payee_rules": {
+        "flavian martinez": {"category": "lawn",          "payee": "Venmo - Flavian Martinez"},
+        "imelda barcenas":  {"category": "housecleaning", "payee": "Venmo - Imelda Barcenas"}
+      }
+    },
+   {
+      "_comment": "Google Play Store receipts, sent from googleplay-noreply@google.com",
+      "name_contains": "Google Play Store",
+      "domain": "googleplay-noreply@google.com",
+      "payee": "Google Play Store",
+      "account": "usaae"
+    },
+   {
+      "_comment": "PayPal service notifications",
+      "name_contains": "PayPal",
+      "domain": "service@paypal.com",
+      "payee": "PayPal",
+      "account": "usaae",
+      "_payee_rules_comment": "Maps extracted payee name (case-insensitive) to category shortcut and display payee name",
+      "payee_rules": {
+        "raul rivera": {"category": "home maintenance", "payee": "PayPal - Raul Rivera"}
+      }
     }
   ]
 }

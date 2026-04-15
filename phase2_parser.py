@@ -58,7 +58,10 @@ separate orders, return one entry per order. For a single charge (utility bill,
 grocery total), return one entry.
 
 For each transaction return a JSON object with these fields:
-  date        — ISO date string (YYYY-MM-DD). Use the order/bill date, not today.
+  date        — ISO date string (YYYY-MM-DD). For orders/receipts use the order date.
+                For invoices and utility bills use the due date (not the billing period
+                start, not the email sent date). If no due date is found, use the
+                statement/bill date.
   amount      — positive dollar amount as a number (e.g. 47.23). Total charged, not
                 subtotal; include tax and shipping.
   payee       — merchant name (e.g. "Amazon", "Austin Energy").
@@ -175,21 +178,37 @@ def build_pending_records(
         if warn:
             warnings.append(warn)
 
-        # --- category: Claude's suggestion matched against YNAB ---
-        cat_suggestion = (item.get("category") or "").strip()
-        cat_id, cat_name, warn = yw.resolve_category(cat_suggestion) if cat_suggestion else (None, None, "No category suggested.")
-        if warn:
-            warnings.append(warn)
+        # --- payee_rules: override category (and optionally payee) based on extracted name ---
+        # Use substring match so "Venmo - Flavian Martinez" hits the "flavian martinez" rule
+        payee_rules = rule.get("payee_rules", {})
+        payee_lower = payee.lower().strip()
+        matched_key = next((k for k in payee_rules if k.lower() in payee_lower), None)
+        matched_rule = payee_rules[matched_key] if matched_key else None
+        if matched_rule:
+            log.info(f"  payee_rule matched '{matched_key}' → overriding category and payee.")
+            if "payee" in matched_rule:
+                payee = matched_rule["payee"]
+            cat_override = matched_rule.get("category", "").strip()
+            cat_id, cat_name, warn = yw.resolve_category(cat_override) if cat_override else (None, None, "No category in payee rule.")
+            if warn:
+                warnings.append(warn)
+        else:
+            # --- category: Claude's suggestion matched against YNAB ---
+            cat_suggestion = (item.get("category") or "").strip()
+            cat_id, cat_name, warn = yw.resolve_category(cat_suggestion) if cat_suggestion else (None, None, "No category suggested.")
+            if warn:
+                warnings.append(warn)
 
         # --- memo: prefix + Claude's summary ---
         memo_body = (item.get("memo") or "").strip()
         memo = f"{forwarder_prefix}: {memo_body}" if memo_body else forwarder_prefix + ":"
 
-        # --- confidence warning ---
-        confidence = item.get("confidence", "high")
-        if confidence != "high":
-            notes = item.get("notes", "")
-            warnings.append(f"Claude confidence={confidence}. {notes}".strip())
+        # --- confidence warning (skip if a payee_rule overrode the category) ---
+        if not matched_rule:
+            confidence = item.get("confidence", "high")
+            if confidence != "high":
+                notes = item.get("notes", "")
+                warnings.append(f"Claude confidence={confidence}. {notes}".strip())
 
         records.append({
             "received_at": received_at,

@@ -216,20 +216,24 @@ if selected_section == "Pending Transactions":
     st.subheader("📬 Pending Transactions")
     st.caption("Transactions parsed from email — review, edit, then approve or reject.")
 
-    if st.button("Check for New Transactions", icon="📧"):
+    _polling = st.session_state.get("polling", False)
+    if st.button("Check for New Transactions", icon="📧", disabled=_polling):
+        st.session_state["polling"] = True
+        st.rerun()
+
+    if _polling:
         import email_poller
         import io, logging
-        buf = io.StringIO()
-        handler = logging.StreamHandler(buf)
-        handler.setLevel(logging.INFO)
-        logging.getLogger().addHandler(handler)
-        try:
-            email_poller.run()
-        finally:
-            logging.getLogger().removeHandler(handler)
-        output = buf.getvalue().strip()
-        if output:
-            st.code(output)
+        with st.spinner("Checking for new transactions..."):
+            buf = io.StringIO()
+            handler = logging.StreamHandler(buf)
+            handler.setLevel(logging.INFO)
+            logging.getLogger().addHandler(handler)
+            try:
+                email_poller.run()
+            finally:
+                logging.getLogger().removeHandler(handler)
+        st.session_state["polling"] = False
         st.session_state["nav_idx"] = _PENDING_IDX
         st.rerun()
 
