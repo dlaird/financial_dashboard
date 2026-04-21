@@ -39,10 +39,11 @@ def _budget_id():
 # Account helpers
 # ---------------------------------------------------------------------------
 
+@lru_cache(maxsize=None)
 def get_accounts(include_closed: bool = True) -> list[dict]:
     """Return list of {id, name, closed, deleted} for all accounts."""
     url = f"{YNAB_BASE}/budgets/{_budget_id()}/accounts"
-    resp = requests.get(url, headers=_headers())
+    resp = requests.get(url, headers=_headers(), timeout=30)
     resp.raise_for_status()
     accounts = resp.json()["data"]["accounts"]
     result = [
@@ -66,10 +67,11 @@ def account_name_to_id(name: str) -> str | None:
 # Category helpers
 # ---------------------------------------------------------------------------
 
+@lru_cache(maxsize=None)
 def get_categories() -> list[dict]:
     """Return flat list of {id, name, group_name} for all non-hidden categories."""
     url = f"{YNAB_BASE}/budgets/{_budget_id()}/categories"
-    resp = requests.get(url, headers=_headers())
+    resp = requests.get(url, headers=_headers(), timeout=30)
     resp.raise_for_status()
     groups = resp.json()["data"]["category_groups"]
     result = []
@@ -179,7 +181,7 @@ def check_duplicate(date_str: str, amount_milliunits: int, payee: str) -> list[d
     date = datetime.fromisoformat(date_str)
     since = (date - timedelta(days=3)).strftime("%Y-%m-%d")
     url = f"{YNAB_BASE}/budgets/{_budget_id()}/transactions"
-    resp = requests.get(url, headers=_headers(), params={"since_date": since})
+    resp = requests.get(url, headers=_headers(), params={"since_date": since}, timeout=30)
     resp.raise_for_status()
     transactions = resp.json()["data"]["transactions"]
 
@@ -230,8 +232,15 @@ def post_transaction(
         payload["transaction"]["memo"] = memo
 
     url = f"{YNAB_BASE}/budgets/{_budget_id()}/transactions"
-    resp = requests.post(url, headers=_headers(), json=payload)
-    resp.raise_for_status()
+    resp = requests.post(url, headers=_headers(), json=payload, timeout=30)
+    if not resp.ok:
+        try:
+            detail = resp.json().get("error", {}).get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason} — YNAB: {detail}", response=resp
+        )
     return resp.json()["data"]["transaction"]["id"]
 
 

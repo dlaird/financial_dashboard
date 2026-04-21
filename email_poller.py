@@ -175,7 +175,7 @@ def fetch_ynab_emails() -> list[dict]:
 
         since = (date_cls.today().replace(day=1) - __import__("datetime").timedelta(days=1)).replace(day=1)
         since_str = since.strftime("%d-%b-%Y")  # IMAP format: 01-Mar-2026
-        _, msg_ids = imap.search(None, f'(UNSEEN SINCE "{since_str}")')
+        _, msg_ids = imap.search(None, f"(UNSEEN SINCE {since_str})")
         ids = msg_ids[0].split()
         log.info(f"Found {len(ids)} unread email(s) since {since_str}.")
 

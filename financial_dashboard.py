@@ -10,11 +10,12 @@
 ### - organize dashboard
 
 import argparse
+import os
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 import socket
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pandas.tseries.offsets import DateOffset
 # user packages
 import data_helpers as dh
@@ -138,9 +139,14 @@ st.set_page_config(layout="wide")
 st.markdown("""<style>
 [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
 [data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
+section[data-testid="stSidebar"] .stButton > button {
+    width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-left: 14px;
+}
 </style>""", unsafe_allow_html=True)
-### data bits to add to heading
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 port = 8501  # default Streamlit port
 try:
     # Connect to an external address (doesn't send data) to find the real LAN IP
@@ -155,48 +161,73 @@ with st.container():
     st.title("Spending Dashboard")
     st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
 
-# Sidebar
-# st.sidebar.markdown(f"**Dashboard generated:** {timestamp}")
-st.sidebar.markdown(f"""
-**Dashboard generated:**\n
-**{timestamp}**\n
-**Dashboard URL:** [`http://{ip_address}:{port}`](http://{ip_address}:{port})
-""")
+# ---- Sidebar: Refresh ----
+if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
+    with st.spinner("Fetching latest data from YNAB..."):
+        get_ynab_data()
+        load_data.clear()
+    st.rerun()
 
+st.sidebar.markdown("---")
+
+# ---- Navigation ----
+_spending_keys = [
+    "Spending Breakdown", "Spending Alerts", "Actual vs. Plan",
+    "Trend Analysis", "Expense Super Groups", "Living Expenses",
+    "Goals", "Basic Expenses", "Inflows", "Other Expenses",
+]
+_utility_keys = ["Pending Transactions", "Payee Cleanup", "How to Use"]
+_pending_count = len(pending_db.get_pending())
+
+# Programmatic navigation (from approve/reject/poll actions — set nav_target before rerun)
+_nav_target = st.session_state.pop("nav_target", None)
+if _nav_target:
+    st.session_state["_nav_selected"] = _nav_target
+
+if "_nav_selected" not in st.session_state:
+    st.session_state["_nav_selected"] = "Spending Breakdown"
+
+_selected = st.session_state["_nav_selected"]
+
+def _nav_label(key):
+    if key == "Pending Transactions" and _pending_count:
+        return f"Pending Transactions ({_pending_count})"
+    return key
+
+st.sidebar.markdown("**Spending Analysis**")
+for _nk in _spending_keys:
+    if st.sidebar.button(_nav_label(_nk), key=f"nav_{_nk}",
+                         type="primary" if _selected == _nk else "secondary"):
+        st.session_state["_nav_selected"] = _nk
+        st.rerun()
+
+st.sidebar.markdown("**Utility**")
+for _nk in _utility_keys:
+    if st.sidebar.button(_nav_label(_nk), key=f"nav_{_nk}",
+                         type="primary" if _selected == _nk else "secondary"):
+        st.session_state["_nav_selected"] = _nk
+        st.rerun()
+
+selected_section = _selected
+
+# ---- Demo Mode ----
+st.sidebar.markdown("---")
 st.sidebar.checkbox("Demo Mode", key="demo_mode", help="Scrambles amounts and payee names for safe screen-sharing.")
 if demo_mode:
     st.sidebar.error("DEMO MODE — numbers are not real")
 
-_pending_count = len(pending_db.get_pending())
-_pending_label = f"Pending Transactions ({_pending_count})" if _pending_count else "Pending Transactions"
+# ---- Dashboard info ----
+st.sidebar.markdown("---")
+_csv_path = "ynab_extract.csv"
+_data_ts = (datetime.fromtimestamp(os.path.getmtime(_csv_path)).strftime("%Y-%m-%d %H:%M")
+            if os.path.exists(_csv_path) else "unknown")
+st.sidebar.markdown(f"""
+**Dashboard URL:**
+[`http://{ip_address}:{port}`](http://{ip_address}:{port})
 
-_SECTION_KEYS = [
-    "Spending Alerts",
-    "Spending Breakdown",
-    "Trend Analysis",
-    "Payee Cleanup",
-    "Expense Super Groups",
-    "Living Expenses",
-    "Goals",
-    "Basic Expenses",
-    "Living Expense Details",
-    "Travel Details",
-    "Inflows",
-    "How to Use",
-    "Pending Transactions",
-]
-_PENDING_IDX = _SECTION_KEYS.index("Pending Transactions")
-
-# Display labels: pending entry gets the live count; all others are unchanged
-_section_labels = _SECTION_KEYS[:-1] + [_pending_label]
-
-if "nav_idx" not in st.session_state:
-    st.session_state["nav_idx"] = 0
-
-_selected_label = st.sidebar.radio("**Jump to Section**", _section_labels, index=st.session_state["nav_idx"])
-_selected_display_idx = _section_labels.index(_selected_label)
-st.session_state["nav_idx"] = _selected_display_idx
-selected_section = _SECTION_KEYS[_selected_display_idx]
+**Data last refreshed:**
+{_data_ts}
+""")
 
 @st.cache_data(ttl=300)
 def _ynab_accounts():
@@ -234,7 +265,7 @@ if selected_section == "Pending Transactions":
             finally:
                 logging.getLogger().removeHandler(handler)
         st.session_state["polling"] = False
-        st.session_state["nav_idx"] = _PENDING_IDX
+        st.session_state["nav_target"] = "Pending Transactions"
         st.rerun()
 
     pending = pending_db.get_pending()
@@ -251,10 +282,72 @@ if selected_section == "Pending Transactions":
         if "dup_warnings" not in st.session_state:
             st.session_state["dup_warnings"] = {}
 
+        tx_by_id = {tx["id"]: tx for tx in pending}
+
+        def _bulk_post(target_ids):
+            successes, errors = [], []
+            for tid in target_ids:
+                tx = tx_by_id[tid]
+                # Use edited session_state values; fall back to DB values if widget not yet rendered
+                payee_val  = st.session_state.get(f"payee_{tid}", tx.get("payee") or "")
+                amt_val    = st.session_state.get(f"amt_{tid}",   abs((tx.get("amount_milliunits") or 0) / 1000))
+                date_val   = st.session_state.get(f"date_{tid}",  tx.get("date") or "")
+                acct_val   = st.session_state.get(f"acct_{tid}",  tx.get("account_name") or "")
+                cat_val    = st.session_state.get(f"cat_{tid}",   "")
+                memo_val   = st.session_state.get(f"memo_{tid}",  tx.get("memo") or "")
+                amount_mu  = -int(round(amt_val * 1000))
+                resolved_acct_id = acct_lookup.get(acct_val)
+                resolved_cat_id  = cat_lookup.get(cat_val) if cat_val and cat_val != "(none)" else None
+                if not resolved_acct_id:
+                    errors.append(f"#{tid} ({payee_val}): account not found — skipped")
+                    continue
+                try:
+                    ynab_id = yw.post_transaction(
+                        date=date_val, amount_milliunits=amount_mu, payee=payee_val,
+                        account_id=resolved_acct_id, category_id=resolved_cat_id,
+                        memo=memo_val or None,
+                    )
+                    pending_db.approve_transaction(tid, ynab_id)
+                    successes.append(tid)
+                except Exception as e:
+                    errors.append(f"#{tid} ({payee_val}): {e}")
+            return successes, errors
+
+        # ---- Bulk action bar ----
+        _all_ids = [tx["id"] for tx in pending]
+        _sel_ids = [tid for tid in _all_ids if st.session_state.get(f"sel_{tid}", False)]
+
+        _bc1, _bc2, _bc3 = st.columns([1, 1, 3])
+        with _bc1:
+            _approve_all = st.button("Approve All", key="bulk_approve_all", type="primary")
+        with _bc2:
+            _sel_label = f"Approve Selected ({len(_sel_ids)})" if _sel_ids else "Approve Selected"
+            _approve_sel = st.button(_sel_label, key="bulk_approve_sel", type="primary", disabled=not _sel_ids)
+
+        if _approve_all or _approve_sel:
+            _targets = _all_ids if _approve_all else _sel_ids
+            _ok, _errs = _bulk_post(_targets)
+            if _ok:
+                st.success(f"Approved {len(_ok)} transaction(s).")
+            for _e in _errs:
+                st.error(_e)
+            if _ok:
+                st.session_state["nav_target"] = "Pending Transactions"
+                st.rerun()
+
+        st.markdown("---")
+
+        # ---- Individual transactions ----
         for tx in pending:
             tx_id = tx["id"]
             label = f"#{tx_id} — {tx.get('payee') or 'Unknown payee'}  |  ${abs((tx.get('amount_milliunits') or 0) / 1000):.2f}  |  {tx.get('date', '')}"
-            with st.expander(label, expanded=True):
+
+            chk_col, exp_col = st.columns([1, 25])
+            with chk_col:
+                st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+                st.checkbox("", key=f"sel_{tx_id}", label_visibility="collapsed")
+            with exp_col:
+              with st.expander(label, expanded=True):
                 if tx.get("parse_warnings"):
                     st.warning(f"Parse warnings: {tx['parse_warnings']}")
 
@@ -270,13 +363,11 @@ if selected_section == "Pending Transactions":
                     tx_date = st.text_input("Date (YYYY-MM-DD)", value=tx.get("date") or "", key=f"date_{tx_id}")
 
                 with col2:
-                    # Account selector
                     default_acct = tx.get("account_name") or ""
                     acct_options = acct_names if acct_names else [default_acct]
                     acct_idx = acct_options.index(default_acct) if default_acct in acct_options else 0
                     selected_acct = st.selectbox("Account", acct_options, index=acct_idx, key=f"acct_{tx_id}")
 
-                    # Category selector
                     default_cat_display = ""
                     if tx.get("category_name"):
                         matches = [k for k in cat_names if tx["category_name"] in k]
@@ -287,7 +378,6 @@ if selected_section == "Pending Transactions":
 
                     memo = st.text_input("Memo", value=tx.get("memo") or "", key=f"memo_{tx_id}")
 
-                # Duplicate warning (persists across reruns via session state)
                 dup_key = f"dups_{tx_id}"
                 if st.session_state["dup_warnings"].get(dup_key):
                     dups = st.session_state["dup_warnings"][dup_key]
@@ -304,13 +394,12 @@ if selected_section == "Pending Transactions":
                         resolved_acct_id = acct_lookup.get(selected_acct)
                         resolved_cat_id = cat_lookup.get(selected_cat_display) if selected_cat_display != "(none)" else None
 
-                        # Duplicate check (skip if already warned)
                         if not st.session_state["dup_warnings"].get(dup_key):
                             try:
                                 dups = yw.check_duplicate(tx_date, amount_mu, payee)
                                 if dups:
                                     st.session_state["dup_warnings"][dup_key] = dups
-                                    st.session_state["nav_idx"] = _PENDING_IDX
+                                    st.session_state["nav_target"] = "Pending Transactions"
                                     st.rerun()
                             except Exception as e:
                                 st.error(f"Duplicate check failed: {e}")
@@ -321,17 +410,14 @@ if selected_section == "Pending Transactions":
                             else:
                                 try:
                                     ynab_id = yw.post_transaction(
-                                        date=tx_date,
-                                        amount_milliunits=amount_mu,
-                                        payee=payee,
-                                        account_id=resolved_acct_id,
-                                        category_id=resolved_cat_id,
+                                        date=tx_date, amount_milliunits=amount_mu, payee=payee,
+                                        account_id=resolved_acct_id, category_id=resolved_cat_id,
                                         memo=memo or None,
                                     )
                                     pending_db.approve_transaction(tx_id, ynab_id)
                                     st.session_state["dup_warnings"].pop(dup_key, None)
                                     st.success(f"Posted to YNAB (id: {ynab_id})")
-                                    st.session_state["nav_idx"] = _PENDING_IDX
+                                    st.session_state["nav_target"] = "Pending Transactions"
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Failed to post to YNAB: {e}")
@@ -340,7 +426,7 @@ if selected_section == "Pending Transactions":
                     if st.button("Reject", key=f"reject_{tx_id}"):
                         pending_db.reject_transaction(tx_id)
                         st.session_state["dup_warnings"].pop(f"dups_{tx_id}", None)
-                        st.session_state["nav_idx"] = _PENDING_IDX
+                        st.session_state["nav_target"] = "Pending Transactions"
                         st.rerun()
 
 elif selected_section == "Spending Alerts":
@@ -410,83 +496,264 @@ elif selected_section == "Spending Alerts":
 
 elif selected_section == "Spending Breakdown":
     st.subheader("Spending Breakdown")
-    col_yr, col_sg = st.columns(2)
-    with col_yr:
-        years = sorted(df["year"].dropna().unique().tolist(), reverse=True)
-        selected_year = st.selectbox("Select Year", ["All"] + years, key="sb_year")
-    st.caption(f"Charts show data through {last_month.strftime('%B %Y')} (last full month). Transaction tab includes data through today.")
-    with col_sg:
-        selected_sg = st.selectbox(
-            "Select Supergroup",
-            ["All", "Living Expenses", "Goals", "Basic Expenses"],
-            key="sb_sg"
-        )
 
-    tab_sun, tab_tree, tab_ice, tab_tx = st.tabs(["Sunburst", "Treemap", "Icicle", "Transactions"])
-    with tab_sun:
-        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "sunburst", selected_year, selected_sg), width='stretch', key=f"sun_{selected_year}_{selected_sg}")
-    with tab_tree:
-        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "treemap", selected_year, selected_sg), width='stretch', key=f"tree_{selected_year}_{selected_sg}")
-    with tab_ice:
-        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "icicle", selected_year, selected_sg), width='stretch', key=f"ice_{selected_year}_{selected_sg}")
+    # ---- Defaults and state init (runs before charts so charts see current values) ----
+    _lm_start = last_month.date()
+    _lm_end = (last_month + pd.offsets.MonthEnd(0)).date()
 
-    with tab_tx:
-        st.markdown("#### Transaction Drill-Down")
-        st.caption("Each dropdown narrows the next. Year and supergroup filters above apply here too.")
+    if "sb_date_from" not in st.session_state:
+        st.session_state["sb_date_from"] = _lm_start
+        st.session_state["sb_date_to"]   = _lm_end
+        st.session_state["sb_year"]      = str(last_month.year)
+        st.session_state["sb_sg"]        = "All"
+        st.session_state["_sb_year_prev"] = str(last_month.year)
 
-        # Base: respect both top-level filters, expenses only
-        df_base = df[df["category_supergroup"].isin(["Living Expenses", "Goals", "Basic Expenses"])].copy()
-        if selected_year and selected_year != "All":
-            df_base = df_base[df_base["year"] == selected_year]
-        if selected_sg and selected_sg != "All":
-            df_base = df_base[df_base["category_supergroup"] == selected_sg]
-        df_base = df_base[df_base["amount"] > 0]
-
-        # When a supergroup is already chosen above, skip that dropdown (3 cols); otherwise show all 4
-        if selected_sg and selected_sg != "All":
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                sel_grp = st.selectbox("Group", ["All"] + sorted(df_base["category_group"].dropna().unique()), key="drill_grp")
-            df_grp = df_base if sel_grp == "All" else df_base[df_base["category_group"] == sel_grp]
-            with col2:
-                sel_cat = st.selectbox("Category", ["All"] + sorted(df_grp["category_name"].dropna().unique()), key="drill_cat")
-            df_cat = df_grp if sel_cat == "All" else df_grp[df_grp["category_name"] == sel_cat]
-            with col3:
-                sel_payee = st.selectbox("Payee", ["All"] + sorted(df_cat["payee_name"].dropna().unique()), key="drill_payee")
-            df_tx = df_cat if sel_payee == "All" else df_cat[df_cat["payee_name"] == sel_payee]
+    # Year selector change → update date range
+    _sb_year = st.session_state.get("sb_year", str(last_month.year))
+    if st.session_state.get("_sb_year_prev") != _sb_year:
+        if _sb_year == "All":
+            st.session_state["sb_date_from"] = df["date"].min().date()
+            st.session_state["sb_date_to"]   = _lm_end
         else:
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                sel_sg2 = st.selectbox("Supergroup", ["All"] + sorted(df_base["category_supergroup"].dropna().unique()), key="drill_sg")
-            df_sg2 = df_base if sel_sg2 == "All" else df_base[df_base["category_supergroup"] == sel_sg2]
-            with col2:
-                sel_grp = st.selectbox("Group", ["All"] + sorted(df_sg2["category_group"].dropna().unique()), key="drill_grp")
-            df_grp = df_sg2 if sel_grp == "All" else df_sg2[df_sg2["category_group"] == sel_grp]
-            with col3:
-                sel_cat = st.selectbox("Category", ["All"] + sorted(df_grp["category_name"].dropna().unique()), key="drill_cat")
-            df_cat = df_grp if sel_cat == "All" else df_grp[df_grp["category_name"] == sel_cat]
-            with col4:
-                sel_payee = st.selectbox("Payee", ["All"] + sorted(df_cat["payee_name"].dropna().unique()), key="drill_payee")
-            df_tx = df_cat if sel_payee == "All" else df_cat[df_cat["payee_name"] == sel_payee]
+            _py = int(_sb_year)
+            st.session_state["sb_date_from"] = date(_py, 1, 1)
+            st.session_state["sb_date_to"]   = min(date(_py, 12, 31), _lm_end)
+        st.session_state["_sb_year_prev"] = _sb_year
 
-        # Summary metrics
-        col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("Transactions", f"{len(df_tx):,}")
-        col_m2.metric("Total Spend", f"${df_tx['amount'].sum():,.0f}")
-        col_m3.metric("Avg per Transaction", f"${df_tx['amount'].mean():,.0f}" if len(df_tx) > 0 else "—")
+    _sb_sg       = st.session_state.get("sb_sg", "All")
+    sb_date_from = st.session_state["sb_date_from"]
+    sb_date_to   = st.session_state["sb_date_to"]
 
-        # Transaction table — most recent first, capped at 500 rows
-        tx_cols = ["date", "category_supergroup", "category_group", "category_name", "payee_name", "amount"]
-        if "memo" in df_tx.columns:
-            tx_cols.append("memo")
-        df_tx_show = df_tx[tx_cols].sort_values("date", ascending=False).head(500).copy()
-        df_tx_show["date"] = df_tx_show["date"].dt.strftime("%Y-%m-%d")
-        if len(df_tx) > 500:
-            st.caption(f"Showing 500 of {len(df_tx):,} transactions. Apply filters to narrow results.")
+    # ---- Charts (shown first) ----
+    _chart_key = f"{sb_date_from}_{sb_date_to}_{_sb_sg}"
+    tab_sun, tab_tree, tab_ice = st.tabs(["Sunburst", "Treemap", "Icicle"])
+    with tab_sun:
+        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "sunburst", None, _sb_sg, sb_date_from, sb_date_to),
+                        width='stretch', key=f"sun_{_chart_key}")
+    with tab_tree:
+        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "treemap", None, _sb_sg, sb_date_from, sb_date_to),
+                        width='stretch', key=f"tree_{_chart_key}")
+    with tab_ice:
+        st.plotly_chart(dh.make_hierarchy_chart(df_analytics, "icicle", None, _sb_sg, sb_date_from, sb_date_to),
+                        width='stretch', key=f"ice_{_chart_key}")
+
+    # ---- Filters (below charts, above transactions) ----
+    st.markdown("---")
+    _sb_years = sorted(df["year"].dropna().unique().tolist(), reverse=True)
+    _sb_year_opts = [str(y) for y in _sb_years] + ["All"]
+    col_yr, col_sg, col_d1, col_d2 = st.columns(4)
+    with col_yr:
+        st.selectbox("Year", _sb_year_opts, key="sb_year")
+    with col_sg:
+        st.selectbox("Supergroup", ["All", "Living Expenses", "Goals", "Basic Expenses"], key="sb_sg")
+    with col_d1:
+        sb_date_from = st.date_input("From", value=_lm_start, key="sb_date_from")
+    with col_d2:
+        sb_date_to = st.date_input("To", value=_lm_end, key="sb_date_to")
+
+    # ---- Transaction Drill-Down ----
+    st.markdown("#### Transaction Drill-Down")
+    st.caption("Each dropdown narrows the next.")
+
+    df_base = df[df["category_supergroup"].isin(["Living Expenses", "Goals", "Basic Expenses"])].copy()
+    df_base = df_base[(df_base["date"] >= pd.Timestamp(sb_date_from)) &
+                      (df_base["date"] <= pd.Timestamp(sb_date_to))]
+    if _sb_sg and _sb_sg != "All":
+        df_base = df_base[df_base["category_supergroup"] == _sb_sg]
+
+    if _sb_sg and _sb_sg != "All":
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            sel_grp = st.selectbox("Group", ["All"] + sorted(df_base["category_group"].dropna().unique()), key="drill_grp")
+        df_grp = df_base if sel_grp == "All" else df_base[df_base["category_group"] == sel_grp]
+        with col2:
+            sel_cat = st.selectbox("Category", ["All"] + sorted(df_grp["category_name"].dropna().unique()), key="drill_cat")
+        df_cat = df_grp if sel_cat == "All" else df_grp[df_grp["category_name"] == sel_cat]
+        with col3:
+            sel_payee = st.selectbox("Payee", ["All"] + sorted(df_cat["payee_name"].dropna().unique()), key="drill_payee")
+        df_tx = df_cat if sel_payee == "All" else df_cat[df_cat["payee_name"] == sel_payee]
+    else:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            sel_sg2 = st.selectbox("Supergroup", ["All"] + sorted(df_base["category_supergroup"].dropna().unique()), key="drill_sg")
+        df_sg2 = df_base if sel_sg2 == "All" else df_base[df_base["category_supergroup"] == sel_sg2]
+        with col2:
+            sel_grp = st.selectbox("Group", ["All"] + sorted(df_sg2["category_group"].dropna().unique()), key="drill_grp")
+        df_grp = df_sg2 if sel_grp == "All" else df_sg2[df_sg2["category_group"] == sel_grp]
+        with col3:
+            sel_cat = st.selectbox("Category", ["All"] + sorted(df_grp["category_name"].dropna().unique()), key="drill_cat")
+        df_cat = df_grp if sel_cat == "All" else df_grp[df_grp["category_name"] == sel_cat]
+        with col4:
+            sel_payee = st.selectbox("Payee", ["All"] + sorted(df_cat["payee_name"].dropna().unique()), key="drill_payee")
+        df_tx = df_cat if sel_payee == "All" else df_cat[df_cat["payee_name"] == sel_payee]
+
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric("Transactions", f"{len(df_tx):,}")
+    col_m2.metric("Total Spend", f"${df_tx['amount'].sum():,.0f}")
+    col_m3.metric("Avg per Transaction", f"${df_tx['amount'].mean():,.0f}" if len(df_tx) > 0 else "—")
+
+    tx_cols = ["date", "category_supergroup", "category_group", "category_name", "payee_name", "amount"]
+    if "memo" in df_tx.columns:
+        tx_cols.append("memo")
+    df_tx_show = df_tx[tx_cols].sort_values("date", ascending=False).head(500).copy()
+    df_tx_show["date"] = df_tx_show["date"].dt.strftime("%Y-%m-%d")
+    if len(df_tx) > 500:
+        st.caption(f"Showing 500 of {len(df_tx):,} transactions. Apply filters to narrow results.")
+    st.dataframe(
+        df_tx_show.style.format({"amount": "{:,.0f}"}),
+        hide_index=True, width='stretch'
+    )
+
+elif selected_section == "Actual vs. Plan":
+    st.subheader("Actual vs. Right Capital Plan")
+
+    rc_goals = dh.load_rc_goals()
+    goal_names = rc_goals["Goal"].tolist()
+    _yr_cols = [c for c in rc_goals.columns if isinstance(c, int)]
+
+    _cur_preset = st.session_state.get("gvp_preset", str(today.year))
+    _prev_preset = st.session_state.get("_gvp_year_prev")
+    _gvp_preset_changed = (_cur_preset != _prev_preset)
+
+    # When preset changes to a named year, update dates immediately (before widget renders)
+    if _gvp_preset_changed and _cur_preset != "Custom":
+        _py = int(_cur_preset)
+        st.session_state["gvp_date_from"] = date(_py, 1, 1)
+        st.session_state["gvp_date_to"] = min(date(_py, 12, 31), today.date())
+
+    # Auto-clear to Custom only when dates were manually edited, not when preset just changed
+    if not _gvp_preset_changed and _cur_preset != "Custom":
+        _cur_from = st.session_state.get("gvp_date_from", date(today.year, 1, 1))
+        _cur_to   = st.session_state.get("gvp_date_to",   today.date())
+        try:
+            _chk_yr = int(_cur_preset)
+            if _cur_from != date(_chk_yr, 1, 1) or _cur_to != min(date(_chk_yr, 12, 31), today.date()):
+                st.session_state["gvp_preset"] = "Custom"
+        except (ValueError, TypeError):
+            pass
+
+    st.session_state["_gvp_year_prev"] = _cur_preset
+
+    col_pre, col_d1, col_d2 = st.columns([1, 1, 1])
+    with col_pre:
+        _preset_opts = [str(today.year)] + [str(y) for y in sorted(_yr_cols, reverse=True) if y != today.year] + ["Custom"]
+        _preset = st.selectbox("Year Preset", _preset_opts, key="gvp_preset")
+
+    with col_d1:
+        gvp_from = st.date_input("From", value=date(today.year, 1, 1), key="gvp_date_from")
+    with col_d2:
+        gvp_to = st.date_input("To", value=today.date(), key="gvp_date_to")
+
+    tab_compare, tab_monthly, tab_edit = st.tabs(["Comparison Table", "Monthly Chart", "Edit Plan Amounts"])
+
+    with tab_compare:
+        compare = dh.build_goals_comparison(df, rc_goals, gvp_from, gvp_to)
+        st.caption(f"Plan prorated to selected period ({gvp_from} – {gvp_to}).")
+
+        def _color_goal(val):
+            if pd.isna(val):
+                return ""
+            return "color: red" if val > 0 else "color: green"
+
+        def _color_pct_goal(val):
+            if pd.isna(val):
+                return ""
+            return "color: red" if val > 1.0 else ("color: green" if val < 0.85 else "")
+
         st.dataframe(
-            df_tx_show.style.format({"amount": "{:,.0f}"}),
-            hide_index=True, width='stretch'
+            compare[["Goal", "Plan", "Actual", "% of Plan", "Over/Under"]].style
+                .format({
+                    "Plan": "${:,.0f}",
+                    "Actual": "${:,.0f}",
+                    "% of Plan": "{:.1%}",
+                    "Over/Under": "${:+,.0f}",
+                }, na_rep="-")
+                .map(_color_goal, subset=["Over/Under"])
+                .map(_color_pct_goal, subset=["% of Plan"]),
+            hide_index=True,
+            width='stretch',
         )
+
+    with tab_monthly:
+        col_goal, col_cumul = st.columns([2, 1])
+        with col_goal:
+            sel_goal = st.selectbox("Goal", goal_names, key="gvp_goal")
+        with col_cumul:
+            st.write("")
+            st.write("")
+            cumulative = st.checkbox("Cumulative", key="gvp_cumul")
+
+        # Base transactions for this goal + date range (includes reimbursements/credits)
+        _goal_group = f"Goal - {sel_goal}"
+        _df_goal_tx = df[
+            (df["category_group"] == _goal_group) &
+            (df["date"] >= pd.Timestamp(gvp_from)) &
+            (df["date"] <= pd.Timestamp(gvp_to))
+        ].copy()
+
+        # Cascading filters — category narrows payee options
+        col_cat, col_pay = st.columns(2)
+        with col_cat:
+            _cat_opts = sorted(_df_goal_tx["category_name"].dropna().unique().tolist())
+            sel_cats = st.multiselect("Filter by Category", _cat_opts, key="gvp_cats")
+        _df_cat_filtered = _df_goal_tx[_df_goal_tx["category_name"].isin(sel_cats)] if sel_cats else _df_goal_tx
+        with col_pay:
+            _pay_opts = sorted(_df_cat_filtered["payee_name"].dropna().unique().tolist())
+            sel_pays = st.multiselect("Filter by Payee", _pay_opts, key="gvp_pays")
+
+        fig_monthly = dh.make_goals_monthly_chart(
+            df, rc_goals, sel_goal, gvp_from, gvp_to, cumulative,
+            categories=sel_cats or None, payees=sel_pays or None,
+        )
+        st.plotly_chart(fig_monthly, width='stretch',
+                        key=f"gvp_chart_{sel_goal}_{gvp_from}_{gvp_to}_{cumulative}_{sel_cats}_{sel_pays}")
+
+        # Transaction detail — respect both filters
+        _df_goal_tx = _df_cat_filtered.copy()
+        if sel_pays:
+            _df_goal_tx = _df_goal_tx[_df_goal_tx["payee_name"].isin(sel_pays)]
+        _df_goal_tx = _df_goal_tx.sort_values("date", ascending=False)
+        _net = _df_goal_tx["amount"].sum()
+        _credits = _df_goal_tx[_df_goal_tx["amount"] < 0]["amount"].sum()
+        _caption = f"{len(_df_goal_tx):,} transactions · net ${_net:,.0f}"
+        if _credits < 0:
+            _caption += f" (includes ${abs(_credits):,.0f} in reimbursements/credits)"
+        st.caption(_caption)
+        _tx_cols = ["date", "category_name", "payee_name", "amount"]
+        if "memo" in _df_goal_tx.columns:
+            _tx_cols.append("memo")
+        _df_goal_tx["date"] = _df_goal_tx["date"].dt.strftime("%Y-%m-%d")
+        st.dataframe(
+            _df_goal_tx[_tx_cols].style.format({"amount": "${:,.0f}"}),
+            hide_index=True, width='stretch',
+        )
+
+    with tab_edit:
+        st.caption("Modify Right Capital plan amounts and click Save to update the file.")
+        # Display year columns as comma-formatted strings; parse back to int on save
+        _rc_display = rc_goals[["Goal"]].copy()
+        for c in _yr_cols:
+            _rc_display[str(c)] = rc_goals[c].apply(lambda x: f"{int(x):,}")
+        _col_cfg = {str(c): st.column_config.TextColumn(str(c)) for c in _yr_cols}
+        edited = st.data_editor(
+            _rc_display,
+            hide_index=True,
+            num_rows="fixed",
+            width='stretch',
+            column_config=_col_cfg,
+            key="gvp_editor",
+        )
+        if st.button("Save Plan Amounts", key="gvp_save"):
+            try:
+                save_df = rc_goals.copy()
+                for c in _yr_cols:
+                    save_df[c] = edited[str(c)].apply(
+                        lambda x: int(str(x).replace(",", "").replace("$", "").strip() or 0)
+                    )
+                dh.save_rc_goals(save_df)
+                st.success("Saved to right_capital_goals.xlsx.")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
 
 elif selected_section == "Trend Analysis":
     st.subheader("Trend Analysis")
@@ -538,23 +805,32 @@ elif selected_section == "Expense Super Groups":
     dh.render_chart_pair("Expense Category Super Groups (Monthly)", key_prefix="category_supergroups_monthly", charts=charts)
 
 elif selected_section == "Living Expenses":
-    # with st.expander("🏠 Living Expenses"):
-    dh.render_chart_pair("Living Expenses Category Groups", key_prefix="living_expenses_group", charts=charts)
-    dh.render_chart_pair("Household Expenses Category Group", key_prefix="living_expenses_household", charts=charts)
-    dh.render_chart_pair("Other Discretionary Expenses Category Group", key_prefix="living_expenses_other_discretionary", charts=charts)
-    dh.render_chart_pair("Other Non-Discretionary Expenses Category Group", key_prefix="living_expenses_other_non_discretionary", charts=charts)
-    dh.render_chart_pair("Insurance Expenses Category Group", key_prefix="living_expenses_insurance", charts=charts)
-    dh.render_chart_pair("Auto/Transport Expenses Category Group", key_prefix="living_expenses_auto_transport", charts=charts)
+    _le_tab_charts, _le_tab_detail = st.tabs(["Charts", "Monthly Detail"])
+    with _le_tab_charts:
+        dh.render_chart_pair("Living Expenses Category Groups", key_prefix="living_expenses_group", charts=charts)
+        dh.render_chart_pair("Household Expenses Category Group", key_prefix="living_expenses_household", charts=charts)
+        dh.render_chart_pair("Other Discretionary Expenses Category Group", key_prefix="living_expenses_other_discretionary", charts=charts)
+        dh.render_chart_pair("Other Non-Discretionary Expenses Category Group", key_prefix="living_expenses_other_non_discretionary", charts=charts)
+        dh.render_chart_pair("Insurance Expenses Category Group", key_prefix="living_expenses_insurance", charts=charts)
+        dh.render_chart_pair("Auto/Transport Expenses Category Group", key_prefix="living_expenses_auto_transport", charts=charts)
+    with _le_tab_detail:
+        st.subheader("🏠 Living Expenses Details")
+        st.dataframe(df_cl_living_summary_styled)
 
 elif selected_section == "Goals":
-    # with st.expander("🎯 Goals"):
-    dh.render_chart_pair("Goals Category Groups", key_prefix="goal_group", charts=charts)
-    dh.render_chart_pair("Chris on Payroll Goal Category Group", key_prefix="goal_chris_on_payroll", charts=charts)
-    dh.render_chart_pair("Travel Goal Category Group", key_prefix="goal_travel", charts=charts)
-    dh.render_chart_pair("Children - Non Academic Goal Category Group", key_prefix="goal_children_non_academic", charts=charts)
-    dh.render_chart_pair("Home Improvement Goal Category Group", key_prefix="goal_home_improvement", charts=charts)
-    st.subheader("Goals Summary")
-    st.dataframe(df_cl_goals_summary_styled)
+    _g_tab_charts, _g_tab_travel, _g_tab_summary = st.tabs(["Charts", "Travel Details", "Summary Table"])
+    with _g_tab_charts:
+        dh.render_chart_pair("Goals Category Groups", key_prefix="goal_group", charts=charts)
+        dh.render_chart_pair("Chris on Payroll Goal Category Group", key_prefix="goal_chris_on_payroll", charts=charts)
+        dh.render_chart_pair("Travel Goal Category Group", key_prefix="goal_travel", charts=charts)
+        dh.render_chart_pair("Children - Non Academic Goal Category Group", key_prefix="goal_children_non_academic", charts=charts)
+        dh.render_chart_pair("Home Improvement Goal Category Group", key_prefix="goal_home_improvement", charts=charts)
+    with _g_tab_travel:
+        st.subheader("✈️ Travel Spending Details")
+        st.dataframe(df_cl_travel_summary_styled)
+    with _g_tab_summary:
+        st.subheader("Goals Summary")
+        st.dataframe(df_cl_goals_summary_styled)
 
 elif selected_section == "Basic Expenses":
     # with st.expander("🧱 Basic Expenses"):
@@ -566,7 +842,160 @@ elif selected_section == "Basic Expenses":
     st.dataframe(df_cl_basic_summary_styled)
 
 elif selected_section == "Inflows":
-    dh.render_chart_pair("Inflow Category Groups", key_prefix="inflow", charts=charts)
+    st.subheader("Inflows")
+    st.caption("Income transactions (Inflow: Ready to Assign), shown as positive amounts.")
+
+    # Date range — same year-preset pattern used elsewhere
+    _inf_default_from = date(today.year, 1, 1)
+    _inf_default_to = today.date()
+    _inf_yr_cols = sorted(df[df["category_name"] == "Inflow: Ready to Assign"]["year"]
+                          .dropna().astype(int).unique().tolist(), reverse=True)
+
+    _inf_cur_preset = st.session_state.get("inf_preset", str(today.year))
+    _inf_prev = st.session_state.get("_inf_year_prev")
+    _inf_preset_changed = (_inf_cur_preset != _inf_prev)
+
+    if _inf_preset_changed and _inf_cur_preset != "Custom":
+        _py = int(_inf_cur_preset)
+        st.session_state["inf_date_from"] = date(_py, 1, 1)
+        st.session_state["inf_date_to"] = min(date(_py, 12, 31), today.date())
+
+    if not _inf_preset_changed and _inf_cur_preset != "Custom":
+        _inf_cur_from = st.session_state.get("inf_date_from", _inf_default_from)
+        _inf_cur_to   = st.session_state.get("inf_date_to",   _inf_default_to)
+        try:
+            _chk = int(_inf_cur_preset)
+            if _inf_cur_from != date(_chk, 1, 1) or _inf_cur_to != min(date(_chk, 12, 31), today.date()):
+                st.session_state["inf_preset"] = "Custom"
+        except (ValueError, TypeError):
+            pass
+
+    st.session_state["_inf_year_prev"] = _inf_cur_preset
+
+    col_pre, col_d1, col_d2 = st.columns([1, 1, 1])
+    with col_pre:
+        _inf_preset_opts = [str(today.year)] + [str(y) for y in _inf_yr_cols if y != today.year] + ["Custom"]
+        _inf_preset = st.selectbox("Year Preset", _inf_preset_opts, key="inf_preset")
+
+    with col_d1:
+        inf_from = st.date_input("From", value=_inf_default_from, key="inf_date_from")
+    with col_d2:
+        inf_to = st.date_input("To", value=_inf_default_to, key="inf_date_to")
+
+    # Build base filtered df (sign-flipped) to populate payee options
+    _df_inf_base = df[
+        (df["category_name"] == "Inflow: Ready to Assign") &
+        (df["date"] >= pd.Timestamp(inf_from)) &
+        (df["date"] <= pd.Timestamp(inf_to))
+    ].copy()
+    _df_inf_base["amount"] = (_df_inf_base["amount"] * -1).round(2)
+    _df_inf_base = _df_inf_base[_df_inf_base["amount"] > 0]
+
+    _inf_payee_opts = sorted(_df_inf_base["payee_name"].dropna().unique().tolist())
+    sel_inf_pays = st.multiselect("Filter by Payee", _inf_payee_opts, key="inf_payees")
+
+    # Chart
+    st.plotly_chart(
+        dh.make_inflows_chart(df, inf_from, inf_to, payees=sel_inf_pays or None),
+        width='stretch', key=f"inf_chart_{inf_from}_{inf_to}_{sel_inf_pays}",
+    )
+
+    # Transaction table
+    _df_inf = _df_inf_base.copy()
+    if sel_inf_pays:
+        _df_inf = _df_inf[_df_inf["payee_name"].isin(sel_inf_pays)]
+    _df_inf = _df_inf.sort_values("date", ascending=False)
+    st.caption(f"{len(_df_inf):,} transactions · ${_df_inf['amount'].sum():,.0f} total")
+    _inf_tx_cols = ["date", "payee_name", "amount"]
+    if "memo" in _df_inf.columns:
+        _inf_tx_cols.append("memo")
+    _df_inf = _df_inf[_inf_tx_cols].copy()
+    _df_inf["date"] = _df_inf["date"].dt.strftime("%Y-%m-%d")
+    st.dataframe(
+        _df_inf.style.format({"amount": "${:,.0f}"}),
+        hide_index=True, width='stretch',
+    )
+
+elif selected_section == "Other Expenses":
+    st.subheader("Other Expenses")
+    st.caption("Transactions in categories not tracked by Right Capital: Taxes, Flo's Expenses, Pact Work Expenses, Abt Expenses, and Other.")
+
+    # Date range — same year-preset pattern used in Inflows and Actual vs. Plan
+    _oe_default_from = date(today.year, 1, 1)
+    _oe_default_to = today.date()
+    _oe_yr_cols = sorted(
+        df[df["category_group"] == "Other - Non Right Capital"]["year"]
+        .dropna().astype(int).unique().tolist(), reverse=True
+    )
+
+    _oe_cur_preset = st.session_state.get("oe_preset", str(today.year))
+    _oe_prev = st.session_state.get("_oe_year_prev")
+    _oe_preset_changed = (_oe_cur_preset != _oe_prev)
+
+    if _oe_preset_changed and _oe_cur_preset != "Custom":
+        _py = int(_oe_cur_preset)
+        st.session_state["oe_date_from"] = date(_py, 1, 1)
+        st.session_state["oe_date_to"] = min(date(_py, 12, 31), today.date())
+
+    if not _oe_preset_changed and _oe_cur_preset != "Custom":
+        _oe_cur_from = st.session_state.get("oe_date_from", _oe_default_from)
+        _oe_cur_to   = st.session_state.get("oe_date_to",   _oe_default_to)
+        try:
+            _chk = int(_oe_cur_preset)
+            if _oe_cur_from != date(_chk, 1, 1) or _oe_cur_to != min(date(_chk, 12, 31), today.date()):
+                st.session_state["oe_preset"] = "Custom"
+        except (ValueError, TypeError):
+            pass
+
+    st.session_state["_oe_year_prev"] = _oe_cur_preset
+
+    col_pre, col_d1, col_d2 = st.columns([1, 1, 1])
+    with col_pre:
+        _oe_preset_opts = [str(today.year)] + [str(y) for y in _oe_yr_cols if y != today.year] + ["Custom"]
+        _oe_preset = st.selectbox("Year Preset", _oe_preset_opts, key="oe_preset")
+    with col_d1:
+        oe_from = st.date_input("From", value=_oe_default_from, key="oe_date_from")
+    with col_d2:
+        oe_to = st.date_input("To", value=_oe_default_to, key="oe_date_to")
+
+    # Chart
+    st.plotly_chart(
+        dh.make_other_expenses_chart(df, oe_from, oe_to),
+        width='stretch', key=f"oe_chart_{oe_from}_{oe_to}",
+    )
+
+    # Transaction drill-down
+    st.markdown("#### Transactions")
+    _df_oe = df[
+        (df["category_group"] == "Other - Non Right Capital") &
+        (df["date"] >= pd.Timestamp(oe_from)) &
+        (df["date"] <= pd.Timestamp(oe_to))
+    ].copy()
+
+    col_cat, col_pay = st.columns(2)
+    with col_cat:
+        _oe_cat_opts = sorted(_df_oe["category_name"].dropna().unique().tolist())
+        sel_oe_cat = st.selectbox("Filter by Category", ["All"] + _oe_cat_opts, key="oe_drill_cat")
+    _df_oe_cat = _df_oe if sel_oe_cat == "All" else _df_oe[_df_oe["category_name"] == sel_oe_cat]
+    with col_pay:
+        _oe_pay_opts = sorted(_df_oe_cat["payee_name"].dropna().unique().tolist())
+        sel_oe_pay = st.selectbox("Filter by Payee", ["All"] + _oe_pay_opts, key="oe_drill_pay")
+    _df_oe_tx = _df_oe_cat if sel_oe_pay == "All" else _df_oe_cat[_df_oe_cat["payee_name"] == sel_oe_pay]
+    _df_oe_tx = _df_oe_tx.sort_values("date", ascending=False)
+
+    col_m1, col_m2 = st.columns(2)
+    col_m1.metric("Transactions", f"{len(_df_oe_tx):,}")
+    col_m2.metric("Total", f"${_df_oe_tx['amount'].sum():,.0f}")
+
+    _oe_tx_cols = ["date", "category_name", "payee_name", "amount"]
+    if "memo" in _df_oe_tx.columns:
+        _oe_tx_cols.append("memo")
+    _df_oe_tx = _df_oe_tx[_oe_tx_cols].copy()
+    _df_oe_tx["date"] = _df_oe_tx["date"].dt.strftime("%Y-%m-%d")
+    st.dataframe(
+        _df_oe_tx.style.format({"amount": "${:,.0f}"}),
+        hide_index=True, width='stretch',
+    )
 
 elif selected_section == "How to Use":
     st.subheader("How to Use This Dashboard")
@@ -593,9 +1022,8 @@ The $8,000/month target line on the Living Expenses chart comes directly from th
 | **Living Expenses** | Charts for each Living Expenses category group with the Right Capital $8K target line. |
 | **Goals** | Charts and summary table for goal-related spending. |
 | **Basic Expenses** | Charts and summary table for fixed/recurring expenses. |
-| **Living Expense Details** | Month-by-month summary table with 3-month average and % deviation columns. |
-| **Travel Details** | Same summary table scoped to the Travel goal group. |
 | **Inflows** | Income and transfer inflows over time. |
+| **Other Expenses** | Transactions outside the Right Capital plan: Taxes, Flo's, Pact, Abt, and Other. |
 | **Pending Transactions** | Review and approve transactions submitted by email before they post to YNAB. |
 """)
 
@@ -730,11 +1158,4 @@ dashboard with someone you don't want to see your real financial data.
 - Numbers are stable while you interact (toggling off restores real data instantly)
 """)
 
-elif selected_section == "Living Expense Details":
-    st.subheader("🏠 Living Expenses Details")
-    st.dataframe(df_cl_living_summary_styled)
-
-elif selected_section == "Travel Details":
-    st.subheader("✈️ Travel Spending Details")
-    st.dataframe(df_cl_travel_summary_styled)
 

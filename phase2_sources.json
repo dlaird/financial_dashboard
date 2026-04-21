@@ -15,10 +15,18 @@
       "account": "evisa"
     },
     {
-      "_comment": "Whole Foods (Amazon-owned, separate sender)",
-      "domain": "wholefoodsmarket.com",
-      "payee": "Whole Foods",
-      "account": "evisa"
+      "_comment": "Anthropic, Claude Code and API",
+      "name_contains": "anthropic",
+      "domain": "mail.anthropic.com",
+      "payee": "Anthropic",
+      "account": "usaae"
+    },
+    {
+      "_comment": "AT&T wireless bill",
+      "name_contains": "AT&T Online",
+      "domain": "emailff.att-mail.com",
+      "payee": "AT&T",
+      "account": "usaaa"
     },
     {
       "_comment": "City of Austin electric/utility bill — matches on sender name since domain varies",
@@ -27,29 +35,43 @@
       "account": "usaac"
     },
     {
-      "_comment": "West Travis County water bill — sent via InvoiceCloud billing service",
-      "name_contains": "west travis county",
-      "domain": "invoicecloud.net",
-      "payee": "West Travis County PUD",
-      "account": "usaac"
-    },
-    {
-      "_comment": "Anthropic, Claude Code and API",
-      "name_contains": "anthropic",
-      "domain": "mail.anthropic.com",
-      "payee": "Anthropic",
+      "_comment": "CVS Pharmacy",
+      "name_contains": "CVS",
+      "domain": "mynotifications.cvs.com",
+      "payee": "CVS",
       "account": "usaae"
     },
-   {
+    {
+      "_comment": "Google Play Store receipts",
+      "address": "googleplay-noreply@google.com",
+      "payee": "Google Play Store",
+      "account": "usaae"
+    },
+    {
       "_comment": "Home Depot",
-      "name_contains": "Home Depot",
       "domain": "homedepot.com",
       "payee": "Home Depot",
       "account": "usaae"
     },
-   {
+    {
+      "_comment": "PayPal service notifications",
+      "address": "service@paypal.com",
+      "payee": "PayPal",
+      "account": "usaae",
+      "_payee_rules_comment": "Maps extracted payee name (case-insensitive) to category shortcut and display payee name",
+      "payee_rules": {
+        "raul rivera": {"category": "home maintenance", "payee": "PayPal - Raul Rivera"}
+      }
+    },
+    {
+      "_comment": "Spectrum internet bill — default_category bypasses Claude for single-category payees",
+      "address": "MyAccount@spectrumemails.com",
+      "payee": "Spectrum",
+      "account": "usaaa",
+      "default_category": "internet"
+    },
+    {
       "_comment": "Venmo, various payees, sent via venmo.com domain",
-      "name_contains": "Venmo",
       "domain": "venmo.com",
       "payee": "Venmo",
       "account": "usaac",
@@ -59,23 +81,18 @@
         "imelda barcenas":  {"category": "housecleaning", "payee": "Venmo - Imelda Barcenas"}
       }
     },
-   {
-      "_comment": "Google Play Store receipts, sent from googleplay-noreply@google.com",
-      "name_contains": "Google Play Store",
-      "domain": "googleplay-noreply@google.com",
-      "payee": "Google Play Store",
-      "account": "usaae"
+    {
+      "_comment": "West Travis County water bill — sent via InvoiceCloud billing service",
+      "name_contains": "west travis county",
+      "domain": "invoicecloud.net",
+      "payee": "West Travis County PUD",
+      "account": "usaac"
     },
-   {
-      "_comment": "PayPal service notifications",
-      "name_contains": "PayPal",
-      "domain": "service@paypal.com",
-      "payee": "PayPal",
-      "account": "usaae",
-      "_payee_rules_comment": "Maps extracted payee name (case-insensitive) to category shortcut and display payee name",
-      "payee_rules": {
-        "raul rivera": {"category": "home maintenance", "payee": "PayPal - Raul Rivera"}
-      }
+    {
+      "_comment": "Whole Foods (Amazon-owned, separate sender)",
+      "domain": "wholefoodsmarket.com",
+      "payee": "Whole Foods",
+      "account": "evisa"
     }
   ]
 }

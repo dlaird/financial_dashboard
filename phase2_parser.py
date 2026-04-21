@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+from datetime import date as date_cls
 
 import anthropic
 from dotenv import load_dotenv
@@ -168,6 +169,10 @@ def build_pending_records(
 
         # --- date ---
         tx_date = _parse_date(item.get("date"), default=email_date)
+        tx_date_obj = date_cls.fromisoformat(tx_date) if isinstance(tx_date, str) else tx_date
+        if tx_date_obj > date_cls.today():
+            warnings.append(f"Due date {tx_date} is in the future — set to today. Edit if needed.")
+            tx_date = date_cls.today().isoformat()
 
         # --- payee ---
         payee = item.get("payee") or rule.get("payee") or ""
@@ -178,12 +183,15 @@ def build_pending_records(
         if warn:
             warnings.append(warn)
 
-        # --- payee_rules: override category (and optionally payee) based on extracted name ---
-        # Use substring match so "Venmo - Flavian Martinez" hits the "flavian martinez" rule
+        # --- category resolution (three sources, in priority order) ---
+        # 1. payee_rules: match extracted payee name → category + display name override
+        # 2. default_category: rule-level override for single-category payees (e.g. Spectrum)
+        # 3. Claude's suggestion
         payee_rules = rule.get("payee_rules", {})
         payee_lower = payee.lower().strip()
         matched_key = next((k for k in payee_rules if k.lower() in payee_lower), None)
         matched_rule = payee_rules[matched_key] if matched_key else None
+
         if matched_rule:
             log.info(f"  payee_rule matched '{matched_key}' → overriding category and payee.")
             if "payee" in matched_rule:
@@ -192,8 +200,14 @@ def build_pending_records(
             cat_id, cat_name, warn = yw.resolve_category(cat_override) if cat_override else (None, None, "No category in payee rule.")
             if warn:
                 warnings.append(warn)
+        elif rule.get("default_category"):
+            cat_override = rule["default_category"].strip()
+            log.info(f"  default_category '{cat_override}' applied from sender rule.")
+            cat_id, cat_name, warn = yw.resolve_category(cat_override)
+            if warn:
+                warnings.append(warn)
         else:
-            # --- category: Claude's suggestion matched against YNAB ---
+            # Claude's suggestion
             cat_suggestion = (item.get("category") or "").strip()
             cat_id, cat_name, warn = yw.resolve_category(cat_suggestion) if cat_suggestion else (None, None, "No category suggested.")
             if warn:

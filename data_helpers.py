@@ -215,20 +215,33 @@ def style_summary(df):
     )
 
 @st.cache_data
-def make_hierarchy_chart(df, chart_type="sunburst", year=None, supergroup=None):
+def make_hierarchy_chart(df, chart_type="sunburst", year=None, supergroup=None,
+                         date_from=None, date_to=None):
     """Build a hierarchy chart (sunburst, treemap, or icicle) of spending.
 
     Args:
         df: raw transactions DataFrame
         chart_type: "sunburst", "treemap", or "icicle"
-        year: year value to filter, or None / "All" for all years
+        year: year string filter, or None / "All" for all years (ignored when date_from/to set)
         supergroup: one of the supergroup names to filter, or None / "All" for all
+        date_from: optional date lower bound (overrides year when provided)
+        date_to: optional date upper bound (overrides year when provided)
     """
     df_sb = df[df["category_supergroup"].isin(["Living Expenses", "Goals", "Basic Expenses"])].copy()
-    if year and year != "All":
+
+    if date_from and date_to:
+        df_sb = df_sb[(df_sb["date"] >= pd.Timestamp(date_from)) &
+                      (df_sb["date"] <= pd.Timestamp(date_to))]
+        date_label = f"{pd.Timestamp(date_from).strftime('%b %d %Y')} – {pd.Timestamp(date_to).strftime('%b %d %Y')}"
+    elif year and year != "All":
         df_sb = df_sb[df_sb["year"] == year]
+        date_label = str(year)
+    else:
+        date_label = "All Years"
+
     if supergroup and supergroup != "All":
         df_sb = df_sb[df_sb["category_supergroup"] == supergroup]
+
     df_sb = df_sb[df_sb["amount"] > 0]
     df_sb["payee_name"] = df_sb["payee_name"].fillna("Unknown")
 
@@ -240,20 +253,22 @@ def make_hierarchy_chart(df, chart_type="sunburst", year=None, supergroup=None):
 
     df_sb = df_sb.groupby(path, as_index=False)["amount"].sum()
 
-    year_label = year if year and year != "All" else "All Years"
     sg_label = supergroup if supergroup and supergroup != "All" else None
-    title_parts = [p for p in [sg_label, year_label] if p]
+    title_parts = [p for p in [sg_label, date_label] if p]
     title = "Spending Breakdown" + (" — " + " — ".join(str(p) for p in title_parts) if title_parts else "")
+
+    # Show label, formatted dollar amount, and % of parent on each segment
+    text_template = "<b>%{label}</b><br>$%{value:,.0f}<br>%{percentParent:.1%} of parent"
 
     if chart_type == "treemap":
         fig = px.treemap(df_sb, path=path, values="amount", title=title)
-        fig.update_traces(textinfo="label+value+percent parent")
+        fig.update_traces(texttemplate=text_template, textinfo="text")
     elif chart_type == "icicle":
         fig = px.icicle(df_sb, path=path, values="amount", title=title)
-        fig.update_traces(textinfo="label+value+percent parent")
+        fig.update_traces(texttemplate=text_template, textinfo="text")
     else:  # sunburst (default)
         fig = px.sunburst(df_sb, path=path, values="amount", title=title)
-        fig.update_traces(textinfo="label+percent parent")
+        fig.update_traces(texttemplate=text_template, textinfo="text")
 
     fig.update_layout(height=700)
     return fig
@@ -408,6 +423,241 @@ def apply_demo_scramble(df):
     payee_map = {p: f"Vendor {i + 1:03d}" for i, p in enumerate(payees)}
     df["payee_name"] = df["payee_name"].map(payee_map).fillna("Unknown")
     return df
+
+
+def make_inflows_chart(df: pd.DataFrame, date_from, date_to, top_n: int = 8,
+                       payees: list | None = None):
+    """
+    Stacked monthly bar chart of income (Inflow: Ready to Assign), amounts sign-flipped to positive.
+    When payees is provided, shows only those payees (no top-N / Other grouping).
+    Otherwise, top N payees shown individually; remainder grouped as 'Other'.
+    """
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+
+    dfi = df[
+        (df["category_name"] == "Inflow: Ready to Assign") &
+        (df["date"] >= date_from) &
+        (df["date"] <= date_to)
+    ].copy()
+    dfi["amount"] = dfi["amount"] * -1          # flip to positive
+    dfi = dfi[dfi["amount"] > 0]                # drop corrections/zero rows
+    dfi["month"] = dfi["date"].dt.to_period("M").astype(str)
+
+    if payees:
+        dfi = dfi[dfi["payee_name"].isin(payees)]
+        color_col = "payee_name"
+        monthly = dfi.groupby(["month", color_col], as_index=False)["amount"].sum()
+    else:
+        top = (
+            dfi.groupby("payee_name")["amount"].sum()
+            .nlargest(top_n).index.tolist()
+        )
+        dfi["payee_label"] = dfi["payee_name"].where(dfi["payee_name"].isin(top), other="Other")
+        color_col = "payee_label"
+        monthly = dfi.groupby(["month", color_col], as_index=False)["amount"].sum()
+
+    fig = px.bar(
+        monthly,
+        x="month", y="amount", color=color_col,
+        title="Monthly Inflows by Source",
+        labels={"amount": "Amount ($)", "month": "Month",
+                "payee_label": "Source", "payee_name": "Payee"},
+    )
+    fig.update_layout(
+        yaxis=dict(tickprefix="$", tickformat=",.0f"),
+        xaxis_tickangle=45,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=450,
+        margin=dict(t=100),
+    )
+    return fig
+
+
+RC_GOALS_PATH = "right_capital_goals.xlsx"
+
+
+def load_rc_goals() -> pd.DataFrame:
+    """Load Right Capital goal amounts from xlsx. Returns wide DataFrame with 'Goal' + year columns."""
+    return pd.read_excel(RC_GOALS_PATH)
+
+
+def save_rc_goals(df: pd.DataFrame) -> None:
+    """Save edited Right Capital goals back to xlsx."""
+    df.to_excel(RC_GOALS_PATH, index=False)
+
+
+def _prorate_plan(rc_goals: pd.DataFrame, goal_name: str, date_from: pd.Timestamp, date_to: pd.Timestamp) -> float:
+    """Prorate annual RC plan amounts to the selected date range, handling multi-year spans."""
+    import calendar
+    year_cols = [c for c in rc_goals.columns if isinstance(c, int)]
+    plan_rows = rc_goals.set_index("Goal")
+    if goal_name not in plan_rows.index:
+        return 0.0
+    total = 0.0
+    for year in range(date_from.year, date_to.year + 1):
+        if year not in year_cols:
+            continue
+        annual = float(plan_rows.loc[goal_name, year])
+        yr_start = max(date_from, pd.Timestamp(year, 1, 1))
+        yr_end = min(date_to, pd.Timestamp(year, 12, 31))
+        if yr_start > yr_end:
+            continue
+        days_period = (yr_end - yr_start).days + 1
+        days_year = 366 if calendar.isleap(year) else 365
+        total += annual * days_period / days_year
+    return total
+
+
+def build_goals_comparison(df_ynab: pd.DataFrame, rc_goals: pd.DataFrame,
+                           date_from, date_to) -> pd.DataFrame:
+    """
+    Compare actual Goals spending vs prorated Right Capital plan for a date range.
+
+    Returns DataFrame: Goal, Plan (prorated), Actual, % of Plan, Over/Under
+    """
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+
+    actuals = df_ynab[
+        (df_ynab["category_supergroup"] == "Goals") &
+        (df_ynab["date"] >= date_from) &
+        (df_ynab["date"] <= date_to)
+    ].copy()
+    actuals["goal_name"] = actuals["category_group"].str.replace("^Goal - ", "", regex=True)
+    actuals = actuals.groupby("goal_name", as_index=False)["amount"].sum().rename(columns={"amount": "Actual"})
+
+    all_goals = rc_goals["Goal"].tolist()
+    plan_df = pd.DataFrame({
+        "goal_name": all_goals,
+        "Plan": [_prorate_plan(rc_goals, g, date_from, date_to) for g in all_goals],
+    })
+
+    compare = plan_df.merge(actuals, on="goal_name", how="outer").fillna(0)
+    compare = compare.rename(columns={"goal_name": "Goal"})
+    compare["Plan"] = compare["Plan"].astype(float)
+    compare["Actual"] = compare["Actual"].astype(float)
+    compare["% of Plan"] = compare.apply(lambda r: r["Actual"] / r["Plan"] if r["Plan"] > 0 else None, axis=1)
+    compare["Over/Under"] = compare["Actual"] - compare["Plan"]
+    return compare.sort_values("Goal").reset_index(drop=True)
+
+
+def make_goals_monthly_chart(df_ynab: pd.DataFrame, rc_goals: pd.DataFrame,
+                              goal_name: str, date_from, date_to, cumulative: bool = False,
+                              categories: list | None = None, payees: list | None = None):
+    """
+    Monthly actual spend vs prorated monthly plan for a single goal.
+    cumulative=True switches to running totals with an area fill.
+    categories/payees: optional lists to filter transactions (plan line always shows full goal).
+    """
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+    goal_group = f"Goal - {goal_name}"
+
+    actuals = df_ynab[
+        (df_ynab["category_group"] == goal_group) &
+        (df_ynab["date"] >= date_from) &
+        (df_ynab["date"] <= date_to)
+    ].copy()
+    if categories:
+        actuals = actuals[actuals["category_name"].isin(categories)]
+    if payees:
+        actuals = actuals[actuals["payee_name"].isin(payees)]
+    actuals["month"] = actuals["date"].dt.to_period("M")
+    monthly_actual = actuals.groupby("month")["amount"].sum()
+
+    all_months = pd.period_range(date_from.to_period("M"), date_to.to_period("M"), freq="M")
+    monthly_actual = monthly_actual.reindex(all_months, fill_value=0)
+
+    # Monthly plan = annual_plan[year] / 12 for each month
+    plan_rows = rc_goals.set_index("Goal")
+    year_cols = [c for c in rc_goals.columns if isinstance(c, int)]
+    monthly_plan = [
+        float(plan_rows.loc[goal_name, m.year]) / 12
+        if goal_name in plan_rows.index and m.year in year_cols else 0.0
+        for m in all_months
+    ]
+
+    mdf = pd.DataFrame({
+        "month": [str(m) for m in all_months],
+        "Actual": monthly_actual.values,
+        "Plan": monthly_plan,
+    })
+    mdf["Cum Actual"] = mdf["Actual"].cumsum()
+    mdf["Cum Plan"] = mdf["Plan"].cumsum()
+
+    fig = go.Figure()
+    if cumulative:
+        fig.add_trace(go.Scatter(
+            x=mdf["month"], y=mdf["Cum Plan"],
+            name="Cumulative Plan", mode="lines",
+            line=dict(dash="dash", color="orange", width=2),
+        ))
+        fig.add_trace(go.Scatter(
+            x=mdf["month"], y=mdf["Cum Actual"],
+            name="Cumulative Actual", mode="lines",
+            fill="tozeroy", line=dict(color="steelblue", width=2),
+        ))
+        title = f"{goal_name} — Cumulative Actual vs. Plan"
+    else:
+        fig.add_trace(go.Bar(
+            x=mdf["month"], y=mdf["Actual"],
+            name="Monthly Actual", marker_color="steelblue",
+        ))
+        fig.add_trace(go.Scatter(
+            x=mdf["month"], y=mdf["Plan"],
+            name="Monthly Plan (full goal)", mode="lines+markers",
+            line=dict(dash="dash", color="orange", width=2),
+        ))
+        title = f"{goal_name} — Monthly Actual vs. Plan"
+
+    filter_parts = []
+    if categories:
+        filter_parts.append(f"Categories: {', '.join(categories)}")
+    if payees:
+        filter_parts.append(f"Payees: {', '.join(payees)}")
+    if filter_parts:
+        title += f"<br><sup>Filtered — {' · '.join(filter_parts)} · Plan line shows full goal</sup>"
+
+    fig.update_layout(
+        title=title,
+        yaxis=dict(tickprefix="$", tickformat=",.0f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=420,
+        margin=dict(t=80),
+    )
+    return fig
+
+
+def make_other_expenses_chart(df: pd.DataFrame, date_from, date_to):
+    """Monthly stacked bar chart of Other - Non Right Capital spending by category."""
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+
+    dfo = df[
+        (df["category_group"] == "Other - Non Right Capital") &
+        (df["date"] >= date_from) &
+        (df["date"] <= date_to) &
+        (df["amount"] > 0)
+    ].copy()
+    dfo["month"] = dfo["date"].dt.to_period("M").astype(str)
+
+    monthly = dfo.groupby(["month", "category_name"], as_index=False)["amount"].sum()
+
+    fig = px.bar(
+        monthly,
+        x="month", y="amount", color="category_name",
+        title="Other Expenses by Category",
+        labels={"amount": "Amount ($)", "month": "Month", "category_name": "Category"},
+    )
+    fig.update_layout(
+        yaxis=dict(tickprefix="$", tickformat=",.0f"),
+        xaxis_tickangle=45,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=450,
+        margin=dict(t=100),
+    )
+    return fig
 
 
 def get_time_anchors():

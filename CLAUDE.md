@@ -244,3 +244,88 @@ Next logical steps
 - Add more senders to phase2_sources.json as needed (see How to Use for instructions)
 - start_dashboard.sh (tmux-based): created but not yet working from Windows SSH terminal;
   may not be worth pursuing since VS Code terminal works fine for normal use
+
+=============================================================================================
+
+Session Summary — 2026-04-21
+Bug fixes and enhancements implemented
+
+phase2_parser.py
+- Fixed TypeError in build_pending_records: tx_date from _parse_date() is a date object but was
+  being compared to date_cls.today().isoformat() (a string). Fixed by normalizing both sides to
+  date objects via fromisoformat() before comparison.
+
+email_poller.py
+- Fixed IMAP SINCE search returning 0 results: per RFC 3501, date values in IMAP search criteria
+  must be unquoted literals (01-Mar-2026), not quoted strings ("01-Mar-2026"). Removing quotes
+  restored discovery of unread emails.
+
+ynab_writer.py
+- Added @lru_cache(maxsize=None) to get_accounts() and get_categories(): previously these made
+  a live YNAB API call on every invocation despite the docstring claiming in-process caching.
+  Processing 5 emails now makes 2 YNAB API calls instead of ~15, and eliminates hangs from
+  YNAB rate limiting.
+- Added timeout=30 to all requests.get / requests.post calls so network hangs fail fast.
+
+financial_dashboard.py — Navigation
+- Replaced two-radio sidebar navigation with button-based navigation. Radio buttons don't fire
+  on_change when clicking an already-selected value, causing the Pending Transactions section to
+  be unreachable after programmatic navigation. Buttons always fire on click.
+- Single _nav_selected session_state key replaces the prior _nav_active / _nav_sp / _nav_ut
+  three-key pattern.
+- Nav buttons styled to 200px width with 14px left indent (CSS) instead of full sidebar width.
+- Spending Breakdown moved to top of nav list and made the default landing page.
+
+financial_dashboard.py — Spending Breakdown
+- Filters (Year, Supergroup, From, To) moved below the chart tabs and above the transaction
+  drill-down, so charts are visible immediately on page load without scrolling past controls.
+- Default date range changed to first/last day of last complete month (was: current year).
+  Session state initialized on first visit so charts pick up correct defaults immediately.
+- Year selector change still updates From/To dates automatically.
+- Transactions tab removed; drill-down is now a persistent section below the filters.
+- Charts read filter values from session_state before rendering, so there is no one-rerun lag
+  between filter changes and chart updates.
+
+financial_dashboard.py — Pending Transactions
+- Added bulk approve: "Approve All" and "Approve Selected (N)" buttons at the top of the section.
+  Bulk approve skips the duplicate check and reads edited field values from session_state,
+  falling back to original DB values for any transaction not yet opened in the UI.
+- Added per-transaction selection checkboxes to the left of each expander (narrow column layout).
+- _do_bulk_approve() helper defined inline; collects successes and errors, reports both.
+
+financial_dashboard.py — Inflows
+- Added "Filter by Payee" multiselect. When payees are selected, only those payees appear in
+  the chart (each as its own bar, no "Other" bucket) and the transaction table is filtered.
+
+data_helpers.py — New features
+- make_other_expenses_chart(df, date_from, date_to): monthly stacked bar for the
+  "Other - Non Right Capital" category_group.
+- make_inflows_chart: added optional payees parameter; when provided, filters to those payees
+  and skips top-N / "Other" grouping.
+
+financial_dashboard.py — Other Expenses section (new)
+- Added to Spending Analysis nav (after Inflows). Covers all five sub-categories in
+  "Other - Non Right Capital": Taxes, Flo's Expenses, Pact Work Expenses, Abt Expenses,
+  Other Non Right Capital.
+- Same year-preset + From/To date picker pattern as Inflows and Actual vs. Plan.
+- Monthly stacked bar chart by category, cascading Category → Payee dropdowns, transaction table.
+
+financial_dashboard.py — Spending Breakdown transaction drill-down
+- Removed amount > 0 filter so expense refunds/credits in Living Expenses, Goals, and Basic
+  Expenses now appear in the transaction table (they were already reducing chart totals but
+  were invisible in drill-downs).
+
+Architecture notes
+- YNAB API calls in ynab_writer.py are now cached per process via lru_cache; the poller makes
+  one accounts fetch and one categories fetch per run, regardless of how many emails it processes.
+- Navigation state: single _nav_selected key; nav_target is still the programmatic setter used
+  by approve/reject/poll actions before st.rerun().
+- Spending Breakdown filter state is read from session_state before chart rendering so charts
+  always reflect current filter values on the same rerun they were changed.
+
+Next logical steps
+- RC Goals Option 2: grouped bar chart (plan vs. actual) as a new tab in Actual vs. Plan
+- RC Goals Option 3: multi-year trend chart with plan line per year
+- Demo mode: multiply by large number instead of per-category scale factor
+- Spectrum bill not importing — phase2_sources.json entry may need debugging
+- Inline log output from "Check for New Transactions" button (currently terminal-only)
