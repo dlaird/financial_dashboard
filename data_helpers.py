@@ -1,3 +1,6 @@
+import calendar
+import json
+import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -524,10 +527,10 @@ def build_goals_comparison(df_ynab: pd.DataFrame, rc_goals: pd.DataFrame,
         (df_ynab["date"] >= date_from) &
         (df_ynab["date"] <= date_to)
     ].copy()
-    actuals["goal_name"] = actuals["category_group"].str.replace("^Goal - ", "", regex=True)
+    actuals["goal_name"] = actuals["category_group"]
     actuals = actuals.groupby("goal_name", as_index=False)["amount"].sum().rename(columns={"amount": "Actual"})
 
-    all_goals = rc_goals["Goal"].tolist()
+    all_goals = [g for g in rc_goals["Goal"].tolist() if g != LE_TARGET_ROW]
     plan_df = pd.DataFrame({
         "goal_name": all_goals,
         "Plan": [_prorate_plan(rc_goals, g, date_from, date_to) for g in all_goals],
@@ -552,7 +555,7 @@ def make_goals_monthly_chart(df_ynab: pd.DataFrame, rc_goals: pd.DataFrame,
     """
     date_from = pd.Timestamp(date_from)
     date_to = pd.Timestamp(date_to)
-    goal_group = f"Goal - {goal_name}"
+    goal_group = goal_name
 
     actuals = df_ynab[
         (df_ynab["category_group"] == goal_group) &
@@ -625,6 +628,300 @@ def make_goals_monthly_chart(df_ynab: pd.DataFrame, rc_goals: pd.DataFrame,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         height=420,
         margin=dict(t=80),
+    )
+    return fig
+
+
+LE_TARGET_ROW = "Living Expenses Target"
+HC_TARGET_ROW = "Health Care Target"
+
+
+def load_living_target(rc_goals: pd.DataFrame, year: int | None = None) -> int:
+    """Read monthly Living Expenses target from a dedicated row in rc_goals xlsx."""
+    mask = rc_goals["Goal"] == LE_TARGET_ROW
+    if not mask.any():
+        return 8000
+    row = rc_goals[mask].iloc[0]
+    yr_cols = [c for c in rc_goals.columns if isinstance(c, int)]
+    if not yr_cols:
+        return 8000
+    col = year if (year and year in yr_cols) else max(yr_cols)
+    return int(row[col])
+
+
+def save_living_target(amount: int) -> None:
+    """Update the Living Expenses Target row in rc_goals xlsx (adds it if missing)."""
+    df = pd.read_excel(RC_GOALS_PATH)
+    yr_cols = [c for c in df.columns if isinstance(c, int)]
+    mask = df["Goal"] == LE_TARGET_ROW
+    if mask.any():
+        for c in yr_cols:
+            df.loc[mask, c] = amount
+    else:
+        new_row = {"Goal": LE_TARGET_ROW, **{c: amount for c in yr_cols}}
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    df.to_excel(RC_GOALS_PATH, index=False)
+
+
+def load_hc_target(rc_goals: pd.DataFrame, year: int | None = None) -> int:
+    """Read monthly Health Care target from a dedicated row in rc_goals xlsx."""
+    mask = rc_goals["Goal"] == HC_TARGET_ROW
+    if not mask.any():
+        return 0
+    row = rc_goals[mask].iloc[0]
+    yr_cols = [c for c in rc_goals.columns if isinstance(c, int)]
+    if not yr_cols:
+        return 0
+    col = year if (year and year in yr_cols) else max(yr_cols)
+    return int(row[col])
+
+
+def save_hc_target(amount: int) -> None:
+    """Update the Health Care Target row in rc_goals xlsx (adds it if missing)."""
+    df = pd.read_excel(RC_GOALS_PATH)
+    yr_cols = [c for c in df.columns if isinstance(c, int)]
+    mask = df["Goal"] == HC_TARGET_ROW
+    if mask.any():
+        for c in yr_cols:
+            df.loc[mask, c] = amount
+    else:
+        new_row = {"Goal": HC_TARGET_ROW, **{c: amount for c in yr_cols}}
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    df.to_excel(RC_GOALS_PATH, index=False)
+
+
+HC_GROUP = "Basic Expenses - Health Care"
+
+
+def build_health_care_comparison(df_ynab: pd.DataFrame, monthly_target: int,
+                                  date_from, date_to) -> dict:
+    """Actual Health Care spending vs. prorated monthly target for a date range."""
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+
+    actuals = df_ynab[
+        (df_ynab["category_group"] == HC_GROUP) &
+        (df_ynab["date"] >= date_from) &
+        (df_ynab["date"] <= date_to)
+    ].copy()
+
+    total = actuals["amount"].sum()
+    n_months = _count_months(date_from, date_to)
+    plan = monthly_target * n_months
+
+    by_category = (
+        actuals.groupby("category_name")["amount"].sum()
+        .reset_index()
+        .rename(columns={"amount": "Actual", "category_name": "Category"})
+        .sort_values("Actual", ascending=False)
+        .reset_index(drop=True)
+    )
+    by_category["Avg Monthly"] = (by_category["Actual"] / n_months).round(0) if n_months > 0 else 0
+
+    return {
+        "total_actual": total,
+        "plan": plan,
+        "over_under": total - plan,
+        "pct_of_plan": total / plan if plan > 0 else None,
+        "by_category": by_category,
+    }
+
+
+def make_health_care_monthly_chart(df_ynab: pd.DataFrame, monthly_target: int,
+                                    date_from, date_to,
+                                    categories: list | None = None,
+                                    cumulative: bool = False):
+    """Monthly Health Care spending vs. flat target, stacked by category."""
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+
+    actuals = df_ynab[
+        (df_ynab["category_group"] == HC_GROUP) &
+        (df_ynab["date"] >= date_from) &
+        (df_ynab["date"] <= date_to)
+    ].copy()
+    if categories:
+        actuals = actuals[actuals["category_name"].isin(categories)]
+
+    actuals["month"] = actuals["date"].dt.to_period("M")
+    all_months = pd.period_range(date_from.to_period("M"), date_to.to_period("M"), freq="M")
+    month_strs = [str(m) for m in all_months]
+
+    fig = go.Figure()
+
+    if cumulative:
+        monthly_total = actuals.groupby("month")["amount"].sum().reindex(all_months, fill_value=0)
+        cum_actual = monthly_total.cumsum().values
+        cum_plan = [float(monthly_target) * (i + 1) for i in range(len(all_months))]
+
+        fig.add_trace(go.Scatter(x=month_strs, y=cum_plan,
+            name="Cumulative Target", mode="lines",
+            line=dict(dash="dash", color="orange", width=2)))
+        fig.add_trace(go.Scatter(x=month_strs, y=cum_actual,
+            name="Cumulative Actual", mode="lines",
+            fill="tozeroy", line=dict(color="steelblue", width=2)))
+        title = "Health Care — Cumulative Actual vs. Target"
+    else:
+        cat_monthly = actuals.groupby(["month", "category_name"])["amount"].sum().reset_index()
+        cat_monthly["month"] = cat_monthly["month"].astype(str)
+
+        # Largest category first → lands at bottom of stack
+        cat_order = (
+            cat_monthly.groupby("category_name")["amount"].sum()
+            .sort_values(ascending=False).index.tolist()
+        )
+        for cat in cat_order:
+            vals = (
+                cat_monthly[cat_monthly["category_name"] == cat]
+                .set_index("month")["amount"]
+                .reindex(month_strs, fill_value=0)
+            )
+            fig.add_trace(go.Bar(x=month_strs, y=vals.values, name=cat))
+
+        fig.add_trace(go.Scatter(
+            x=month_strs,
+            y=[float(monthly_target)] * len(month_strs),
+            name=f"Monthly Target (${monthly_target:,.0f})",
+            mode="lines+markers",
+            line=dict(dash="dash", color="orange", width=2),
+        ))
+        fig.update_layout(barmode="stack")
+        title = "Health Care — Monthly Actual vs. Target by Category"
+
+    if categories:
+        title += f"<br><sup>Filtered: {', '.join(categories)}</sup>"
+
+    fig.update_layout(
+        title=title,
+        yaxis=dict(tickprefix="$", tickformat=",.0f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=500,
+        margin=dict(t=100),
+    )
+    return fig
+
+
+def _count_months(date_from: pd.Timestamp, date_to: pd.Timestamp) -> float:
+    """Fractional months covered by [date_from, date_to]."""
+    months = 0.0
+    for year in range(date_from.year, date_to.year + 1):
+        for month in range(1, 13):
+            days_in_month = calendar.monthrange(year, month)[1]
+            m_start = pd.Timestamp(year, month, 1)
+            m_end = pd.Timestamp(year, month, days_in_month)
+            o_start = max(date_from, m_start)
+            o_end = min(date_to, m_end)
+            if o_start <= o_end:
+                months += (o_end - o_start).days / days_in_month
+    return months
+
+
+def build_living_expenses_comparison(df_ynab: pd.DataFrame, monthly_target: int,
+                                      date_from, date_to) -> dict:
+    """Actual Living Expenses vs. prorated monthly target for a date range."""
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+
+    actuals = df_ynab[
+        (df_ynab["category_supergroup"] == "Living Expenses") &
+        (df_ynab["date"] >= date_from) &
+        (df_ynab["date"] <= date_to)
+    ].copy()
+
+    total = actuals["amount"].sum()
+    plan = monthly_target * _count_months(date_from, date_to)
+
+    n_months = _count_months(date_from, date_to)
+
+    by_group = (
+        actuals.groupby("category_group")["amount"].sum()
+        .reset_index()
+        .rename(columns={"amount": "Actual", "category_group": "Category Group"})
+        .sort_values("Actual", ascending=False)
+        .reset_index(drop=True)
+    )
+    by_group["Avg Monthly"] = (by_group["Actual"] / n_months).round(0) if n_months > 0 else 0
+
+    return {
+        "total_actual": total,
+        "plan": plan,
+        "over_under": total - plan,
+        "pct_of_plan": total / plan if plan > 0 else None,
+        "by_group": by_group,
+    }
+
+
+def make_living_expenses_monthly_chart(df_ynab: pd.DataFrame, monthly_target: int,
+                                        date_from, date_to,
+                                        groups: list | None = None,
+                                        cumulative: bool = False):
+    """Monthly Living Expenses vs. flat target, stacked by category_group."""
+    date_from = pd.Timestamp(date_from)
+    date_to = pd.Timestamp(date_to)
+
+    actuals = df_ynab[
+        (df_ynab["category_supergroup"] == "Living Expenses") &
+        (df_ynab["date"] >= date_from) &
+        (df_ynab["date"] <= date_to)
+    ].copy()
+    if groups:
+        actuals = actuals[actuals["category_group"].isin(groups)]
+
+    actuals["month"] = actuals["date"].dt.to_period("M")
+    all_months = pd.period_range(date_from.to_period("M"), date_to.to_period("M"), freq="M")
+    month_strs = [str(m) for m in all_months]
+
+    fig = go.Figure()
+
+    if cumulative:
+        monthly_total = actuals.groupby("month")["amount"].sum().reindex(all_months, fill_value=0)
+        cum_actual = monthly_total.cumsum().values
+        cum_plan = [float(monthly_target) * (i + 1) for i in range(len(all_months))]
+
+        fig.add_trace(go.Scatter(x=month_strs, y=cum_plan,
+            name="Cumulative Target", mode="lines",
+            line=dict(dash="dash", color="orange", width=2)))
+        fig.add_trace(go.Scatter(x=month_strs, y=cum_actual,
+            name="Cumulative Actual", mode="lines",
+            fill="tozeroy", line=dict(color="steelblue", width=2)))
+        title = "Living Expenses — Cumulative Actual vs. Target"
+    else:
+        grp_monthly = actuals.groupby(["month", "category_group"])["amount"].sum().reset_index()
+        grp_monthly["month"] = grp_monthly["month"].astype(str)
+
+        # Largest group first → lands at bottom of stack
+        grp_order = (
+            grp_monthly.groupby("category_group")["amount"].sum()
+            .sort_values(ascending=False).index.tolist()
+        )
+
+        for grp in grp_order:
+            vals = (
+                grp_monthly[grp_monthly["category_group"] == grp]
+                .set_index("month")["amount"]
+                .reindex(month_strs, fill_value=0)
+            )
+            fig.add_trace(go.Bar(x=month_strs, y=vals.values, name=grp))
+
+        fig.add_trace(go.Scatter(
+            x=month_strs,
+            y=[float(monthly_target)] * len(month_strs),
+            name=f"Monthly Target (${monthly_target:,.0f})",
+            mode="lines+markers",
+            line=dict(dash="dash", color="orange", width=2),
+        ))
+        fig.update_layout(barmode="stack")
+        title = "Living Expenses — Monthly Actual vs. Target by Category Group"
+
+    if groups:
+        title += f"<br><sup>Filtered: {', '.join(groups)}</sup>"
+
+    fig.update_layout(
+        title=title,
+        yaxis=dict(tickprefix="$", tickformat=",.0f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=500,
+        margin=dict(t=100),
     )
     return fig
 

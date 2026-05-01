@@ -16,10 +16,20 @@ Does the email import process change the read status of the email in the inbox? 
 
 ## next/current
 ## ============
-> Add Living Expenses to Actual vs Plan
+On the bar charts on Goals, Health Care and Living Expense tabs, I think the largest categories are stacked on top.  Please put largest categories on the bottom, smallest on top.
+
+
 
 ## done
 ## ============
+
+I'd like to add another tab to  the Actual vs Plan page.  It should be called "Health Care" and reflect the spending made in all categories under the "Basic Expenses - Health Care" category group.  It should have functionality consistent with the Goals and Living expenses tabs.  Add a "Health Care Monthly Target" input tool next to the one for Living Expenses.  The Health Care tab can be between Goals and Living Expenses.  A row for Health Care should be added to the Comparison Table, and table rows should be alphabetized so they are consistent with tab order.
+
+A small request and three related ones for a bigger enhancement:
+> The banner at the top of the page when it loads, which reads "Spending Dashboard" is taller than necessary and the font in those words is also larger than necessary.  Is it possible to take those down a bit?
+> There's another comparison I want to make in the Actual vs Plan pages.  In addition to the Goals we're comparing, each of which have their own annual, target dollar amount, I also want to review spending on all "Living Expenses - " categories, but their combined total will be compared to a single monthly, target dollar amount.
+> This comparison adds a higher level of aggregation, since the "Goals -" category groups are handled individually, and now we want to aggregate across multiple "Living Expenses - " category groups.  In the charts, we'll want a way to select one or more category groups when we're elooking at Living Expenses.
+> I want to update the goal names in the Edit Plan Amounts table to match their names in YNAB, i.e., give them back their prefix "Goal - ".  I think this will require a code change, what's simplest way to do this?
 
 Two sections of links on dashboard each show an active page, but only one is actually active so other one should be disabled.  The Pending Transactions shows active but clicking it does nothing.  Have to click another in the same group and then Pending Transactions for it to work.
 

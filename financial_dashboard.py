@@ -146,6 +146,7 @@ section[data-testid="stSidebar"] .stButton > button {
     text-overflow: ellipsis;
     margin-left: 14px;
 }
+.block-container { padding-top: 1rem !important; }
 </style>""", unsafe_allow_html=True)
 port = 8501  # default Streamlit port
 try:
@@ -158,8 +159,8 @@ except Exception:
     ip_address = socket.gethostbyname(socket.gethostname())
 
 with st.container():
-    st.title("Spending Dashboard")
-    st.markdown("<hr style='border:2px solid #bbb'>", unsafe_allow_html=True)
+    st.markdown("<h1 style='margin:0 0 0.1rem 0; font-size:2.2rem; font-weight:700'>Spending Dashboard</h1>", unsafe_allow_html=True)
+    st.markdown("<hr style='border:2px solid #bbb; margin-top:0.4rem'>", unsafe_allow_html=True)
 
 # ---- Sidebar: Refresh ----
 if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
@@ -608,7 +609,8 @@ elif selected_section == "Actual vs. Plan":
     st.subheader("Actual vs. Right Capital Plan")
 
     rc_goals = dh.load_rc_goals()
-    goal_names = rc_goals["Goal"].tolist()
+    _target_rows = {dh.LE_TARGET_ROW, dh.HC_TARGET_ROW}
+    goal_names = [g for g in rc_goals["Goal"].tolist() if g not in _target_rows]
     _yr_cols = [c for c in rc_goals.columns if isinstance(c, int)]
 
     _cur_preset = st.session_state.get("gvp_preset", str(today.year))
@@ -644,10 +646,37 @@ elif selected_section == "Actual vs. Plan":
     with col_d2:
         gvp_to = st.date_input("To", value=today.date(), key="gvp_date_to")
 
-    tab_compare, tab_monthly, tab_edit = st.tabs(["Comparison Table", "Monthly Chart", "Edit Plan Amounts"])
+    tab_compare, tab_monthly, tab_hc, tab_living, tab_edit = st.tabs(["Comparison Table", "Goals", "Health Care", "Living Expenses", "Edit Plan Amounts"])
 
     with tab_compare:
         compare = dh.build_goals_comparison(df, rc_goals, gvp_from, gvp_to)
+
+        _hc_target_cmp = dh.load_hc_target(rc_goals, today.year)
+        _hc_sum_cmp = dh.build_health_care_comparison(df, _hc_target_cmp, gvp_from, gvp_to)
+        _hc_row = pd.DataFrame([{
+            "Goal": "Health Care",
+            "Plan": _hc_sum_cmp["plan"],
+            "Actual": _hc_sum_cmp["total_actual"],
+            "% of Plan": _hc_sum_cmp["pct_of_plan"],
+            "Over/Under": _hc_sum_cmp["over_under"],
+        }])
+
+        _le_target_cmp = dh.load_living_target(rc_goals, today.year)
+        _le_sum_cmp = dh.build_living_expenses_comparison(df, _le_target_cmp, gvp_from, gvp_to)
+        _le_row = pd.DataFrame([{
+            "Goal": "Living Expenses",
+            "Plan": _le_sum_cmp["plan"],
+            "Actual": _le_sum_cmp["total_actual"],
+            "% of Plan": _le_sum_cmp["pct_of_plan"],
+            "Over/Under": _le_sum_cmp["over_under"],
+        }])
+
+        compare = (
+            pd.concat([compare, _hc_row, _le_row], ignore_index=True)
+            .sort_values("Goal")
+            .reset_index(drop=True)
+        )
+
         st.caption(f"Plan prorated to selected period ({gvp_from} – {gvp_to}).")
 
         def _color_goal(val):
@@ -684,7 +713,7 @@ elif selected_section == "Actual vs. Plan":
             cumulative = st.checkbox("Cumulative", key="gvp_cumul")
 
         # Base transactions for this goal + date range (includes reimbursements/credits)
-        _goal_group = f"Goal - {sel_goal}"
+        _goal_group = sel_goal
         _df_goal_tx = df[
             (df["category_group"] == _goal_group) &
             (df["date"] >= pd.Timestamp(gvp_from)) &
@@ -728,15 +757,212 @@ elif selected_section == "Actual vs. Plan":
             hide_index=True, width='stretch',
         )
 
+    with tab_hc:
+        _hc_target = dh.load_hc_target(rc_goals, today.year)
+        _hc_comp = dh.build_health_care_comparison(df, _hc_target, gvp_from, gvp_to)
+
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.metric("Actual",      f"${_hc_comp['total_actual']:,.0f}")
+        col_b.metric("Target",      f"${_hc_comp['plan']:,.0f}")
+        col_c.metric("% of Target", f"{_hc_comp['pct_of_plan']:.1%}" if _hc_comp["pct_of_plan"] else "—")
+        col_d.metric("Over/Under",  f"${_hc_comp['over_under']:+,.0f}")
+        st.caption(f"Period: {gvp_from} – {gvp_to} · Monthly target: ${_hc_target:,}")
+
+        _hc_all_cats = sorted(
+            df[df["category_group"] == dh.HC_GROUP]["category_name"]
+            .dropna().unique().tolist()
+        )
+        col_filt, col_cumul_col = st.columns([4, 1])
+        with col_filt:
+            sel_hc_cats = st.multiselect("Filter by Category", _hc_all_cats, key="hc_cats")
+        with col_cumul_col:
+            st.write("")
+            _hc_cumul = st.checkbox("Cumulative", key="hc_cumul")
+
+        st.plotly_chart(
+            dh.make_health_care_monthly_chart(
+                df, _hc_target, gvp_from, gvp_to,
+                categories=sel_hc_cats or None, cumulative=_hc_cumul,
+            ),
+            width='stretch',
+            key=f"hc_chart_{gvp_from}_{gvp_to}_{_hc_target}_{_hc_cumul}_{sel_hc_cats}",
+        )
+
+        st.markdown("**Spending by Category**")
+        st.dataframe(
+            _hc_comp["by_category"].style.format({
+                "Actual": "${:,.0f}",
+                "Avg Monthly": "${:,.0f}",
+            }),
+            hide_index=True, width='stretch',
+        )
+
+        st.markdown("**Month-to-Month Trend by Category**")
+        st.caption(f"Based on data through {last_month.strftime('%B %Y')}.")
+        _hc_trend = dh.prepare_summary(
+            df_analytics[df_analytics["category_group"] == dh.HC_GROUP],
+            windows, first_of_year, last_month, group_col="category_name",
+        )
+        st.dataframe(dh.style_summary(_hc_trend), hide_index=True, width='stretch')
+
+        st.markdown("#### Transactions")
+        _hc_tx = df[
+            (df["category_group"] == dh.HC_GROUP) &
+            (df["date"] >= pd.Timestamp(gvp_from)) &
+            (df["date"] <= pd.Timestamp(gvp_to))
+        ].copy()
+        if sel_hc_cats:
+            _hc_tx = _hc_tx[_hc_tx["category_name"].isin(sel_hc_cats)]
+
+        col_hc_cat, col_hc_pay = st.columns(2)
+        with col_hc_cat:
+            _hc_tx_cat_opts = sorted(_hc_tx["category_name"].dropna().unique())
+            sel_hc_tx_cat = st.selectbox("Filter by Category", ["All"] + list(_hc_tx_cat_opts), key="hc_tx_cat")
+        _hc_tx = _hc_tx if sel_hc_tx_cat == "All" else _hc_tx[_hc_tx["category_name"] == sel_hc_tx_cat]
+        with col_hc_pay:
+            _hc_tx_pay_opts = sorted(_hc_tx["payee_name"].dropna().unique())
+            sel_hc_tx_pay = st.selectbox("Filter by Payee", ["All"] + list(_hc_tx_pay_opts), key="hc_tx_pay")
+        _hc_tx = _hc_tx if sel_hc_tx_pay == "All" else _hc_tx[_hc_tx["payee_name"] == sel_hc_tx_pay]
+
+        _hc_tx = _hc_tx.sort_values("date", ascending=False)
+        st.caption(f"{len(_hc_tx):,} transactions · ${_hc_tx['amount'].sum():,.0f} total")
+        _hc_tx_cols = ["date", "category_name", "payee_name", "amount"]
+        if "memo" in _hc_tx.columns:
+            _hc_tx_cols.append("memo")
+        _hc_tx_show = _hc_tx[_hc_tx_cols].copy()
+        _hc_tx_show["date"] = _hc_tx_show["date"].dt.strftime("%Y-%m-%d")
+        st.dataframe(
+            _hc_tx_show.style.format({"amount": "${:,.0f}"}),
+            hide_index=True, width='stretch',
+        )
+
+    with tab_living:
+        _le_target = dh.load_living_target(rc_goals, today.year)
+        _le_comp = dh.build_living_expenses_comparison(df, _le_target, gvp_from, gvp_to)
+
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.metric("Actual",      f"${_le_comp['total_actual']:,.0f}")
+        col_b.metric("Target",      f"${_le_comp['plan']:,.0f}")
+        col_c.metric("% of Target", f"{_le_comp['pct_of_plan']:.1%}" if _le_comp["pct_of_plan"] else "—")
+        col_d.metric("Over/Under",  f"${_le_comp['over_under']:+,.0f}")
+        st.caption(f"Period: {gvp_from} – {gvp_to} · Monthly target: ${_le_target:,}")
+
+        _le_all_groups = sorted(
+            df[df["category_supergroup"] == "Living Expenses"]["category_group"]
+            .dropna().unique().tolist()
+        )
+        col_filt, col_cumul_col = st.columns([4, 1])
+        with col_filt:
+            sel_le_groups = st.multiselect("Filter by Category Group", _le_all_groups, key="le_groups")
+        with col_cumul_col:
+            st.write("")
+            _le_cumul = st.checkbox("Cumulative", key="le_cumul")
+
+        st.plotly_chart(
+            dh.make_living_expenses_monthly_chart(
+                df, _le_target, gvp_from, gvp_to,
+                groups=sel_le_groups or None, cumulative=_le_cumul,
+            ),
+            width='stretch',
+            key=f"le_chart_{gvp_from}_{gvp_to}_{_le_target}_{_le_cumul}_{sel_le_groups}",
+        )
+
+        st.markdown("**Spending by Category Group**")
+        st.dataframe(
+            _le_comp["by_group"].style.format({
+                "Actual": "${:,.0f}",
+                "Avg Monthly": "${:,.0f}",
+            }),
+            hide_index=True, width='stretch',
+        )
+
+        st.markdown("**Month-to-Month Trend by Category Group**")
+        st.caption(f"Based on data through {last_month.strftime('%B %Y')}.")
+        _le_trend = dh.prepare_summary(
+            df_analytics[df_analytics["category_supergroup"] == "Living Expenses"],
+            windows, first_of_year, last_month, group_col="category_group",
+        )
+        st.dataframe(dh.style_summary(_le_trend), hide_index=True, width='stretch')
+
+        st.markdown("#### Transactions")
+        _le_tx = df[
+            (df["category_supergroup"] == "Living Expenses") &
+            (df["date"] >= pd.Timestamp(gvp_from)) &
+            (df["date"] <= pd.Timestamp(gvp_to))
+        ].copy()
+        if sel_le_groups:
+            _le_tx = _le_tx[_le_tx["category_group"].isin(sel_le_groups)]
+
+        col_le_cat, col_le_pay = st.columns(2)
+        with col_le_cat:
+            _le_tx_cat_opts = sorted(_le_tx["category_name"].dropna().unique())
+            sel_le_tx_cat = st.selectbox("Filter by Category", ["All"] + list(_le_tx_cat_opts), key="le_tx_cat")
+        _le_tx = _le_tx if sel_le_tx_cat == "All" else _le_tx[_le_tx["category_name"] == sel_le_tx_cat]
+        with col_le_pay:
+            _le_tx_pay_opts = sorted(_le_tx["payee_name"].dropna().unique())
+            sel_le_tx_pay = st.selectbox("Filter by Payee", ["All"] + list(_le_tx_pay_opts), key="le_tx_pay")
+        _le_tx = _le_tx if sel_le_tx_pay == "All" else _le_tx[_le_tx["payee_name"] == sel_le_tx_pay]
+
+        _le_tx = _le_tx.sort_values("date", ascending=False)
+        st.caption(f"{len(_le_tx):,} transactions · ${_le_tx['amount'].sum():,.0f} total")
+        _le_tx_cols = ["date", "category_group", "category_name", "payee_name", "amount"]
+        if "memo" in _le_tx.columns:
+            _le_tx_cols.append("memo")
+        _le_tx_show = _le_tx[_le_tx_cols].copy()
+        _le_tx_show["date"] = _le_tx_show["date"].dt.strftime("%Y-%m-%d")
+        st.dataframe(
+            _le_tx_show.style.format({"amount": "${:,.0f}"}),
+            hide_index=True, width='stretch',
+        )
+
     with tab_edit:
-        st.caption("Modify Right Capital plan amounts and click Save to update the file.")
-        # Display year columns as comma-formatted strings; parse back to int on save
-        _rc_display = rc_goals[["Goal"]].copy()
+        col_le_sect, col_hc_sect = st.columns(2)
+        with col_le_sect:
+            st.markdown("**Living Expenses Monthly Target**")
+            _le_cur = dh.load_living_target(rc_goals, today.year)
+            col_le_inp, col_le_btn = st.columns([3, 1])
+            with col_le_inp:
+                _le_edit_val = st.number_input(
+                    "LE Target", value=_le_cur,
+                    min_value=0, step=500, key="le_target_edit_input",
+                    label_visibility="collapsed",
+                )
+            with col_le_btn:
+                if st.button("Save", key="le_target_save"):
+                    dh.save_living_target(_le_edit_val)
+                    st.session_state["_le_target_saved"] = _le_edit_val
+                    st.rerun()
+            if (v := st.session_state.pop("_le_target_saved", None)) is not None:
+                st.success(f"Saved ${v:,}/month.")
+
+        with col_hc_sect:
+            st.markdown("**Health Care Monthly Target**")
+            _hc_cur = dh.load_hc_target(rc_goals, today.year)
+            col_hc_inp, col_hc_btn = st.columns([3, 1])
+            with col_hc_inp:
+                _hc_edit_val = st.number_input(
+                    "HC Target", value=_hc_cur,
+                    min_value=0, step=100, key="hc_target_edit_input",
+                    label_visibility="collapsed",
+                )
+            with col_hc_btn:
+                if st.button("Save", key="hc_target_save"):
+                    dh.save_hc_target(_hc_edit_val)
+                    st.session_state["_hc_target_saved"] = _hc_edit_val
+                    st.rerun()
+            if (v := st.session_state.pop("_hc_target_saved", None)) is not None:
+                st.success(f"Saved ${v:,}/month.")
+
+        st.markdown("---")
+        st.markdown("**Goal Plan Amounts**")
+        st.caption("Edit annual plan amounts and click Save to update the file.")
+        _rc_display = rc_goals[~rc_goals["Goal"].isin(_target_rows)].reset_index(drop=True).copy()
+        _rc_edit = _rc_display[["Goal"]].copy()
         for c in _yr_cols:
-            _rc_display[str(c)] = rc_goals[c].apply(lambda x: f"{int(x):,}")
+            _rc_edit[str(c)] = _rc_display[c].apply(lambda x: f"{int(x):,}")
         _col_cfg = {str(c): st.column_config.TextColumn(str(c)) for c in _yr_cols}
         edited = st.data_editor(
-            _rc_display,
+            _rc_edit,
             hide_index=True,
             num_rows="fixed",
             width='stretch',
@@ -746,10 +972,12 @@ elif selected_section == "Actual vs. Plan":
         if st.button("Save Plan Amounts", key="gvp_save"):
             try:
                 save_df = rc_goals.copy()
-                for c in _yr_cols:
-                    save_df[c] = edited[str(c)].apply(
-                        lambda x: int(str(x).replace(",", "").replace("$", "").strip() or 0)
-                    )
+                for _, erow in edited.iterrows():
+                    goal = erow["Goal"]
+                    mask = save_df["Goal"] == goal
+                    for c in _yr_cols:
+                        val = int(str(erow[str(c)]).replace(",", "").replace("$", "").strip() or 0)
+                        save_df.loc[mask, c] = val
                 dh.save_rc_goals(save_df)
                 st.success("Saved to right_capital_goals.xlsx.")
             except Exception as e:

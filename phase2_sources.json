@@ -42,6 +42,13 @@
       "account": "usaae"
     },
     {
+      "_comment": "Five Star Veterinary",
+      "domain": "5starvet.com",
+      "payee": "Five Star Veterinary",
+      "account": "usaae",
+      "default_category": "pet"
+    },
+    {
       "_comment": "Google Play Store receipts",
       "address": "googleplay-noreply@google.com",
       "payee": "Google Play Store",

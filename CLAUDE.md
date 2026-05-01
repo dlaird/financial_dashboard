@@ -328,4 +328,85 @@ Next logical steps
 - RC Goals Option 3: multi-year trend chart with plan line per year
 - Demo mode: multiply by large number instead of per-category scale factor
 - Spectrum bill not importing — phase2_sources.json entry may need debugging
+
+=============================================================================================
+
+Session Summary — 2026-05-01
+Enhancements implemented
+
+financial_dashboard.py — Banner and CSS
+- Banner changed from h2 at 1.6rem to h1 at 2.2rem bold; matches other page titles
+- Added .block-container { padding-top: 1rem } CSS to reduce whitespace above banner
+
+data_helpers.py / financial_dashboard.py — Goal name handling
+- Removed all "Goal - " prefix stripping/adding code; xlsx Goal names now match
+  YNAB category_group values directly (e.g. "Goal - Travel")
+- Updated right_capital_goals.xlsx: added "Goal - " prefix to all goal rows so
+  they match YNAB category_group names exactly
+- build_goals_comparison: actuals["goal_name"] = actuals["category_group"] (no strip)
+- make_goals_monthly_chart: goal_group = goal_name (no f-string prefix)
+- goal_names list and data_editor now filter out LE_TARGET_ROW and HC_TARGET_ROW
+
+data_helpers.py — Living Expenses improvements
+- LE_TARGET_ROW = "Living Expenses Target" constant for xlsx special row
+- load_living_target(rc_goals, year) / save_living_target(amount): read/write
+  monthly LE target from a dedicated row in right_capital_goals.xlsx
+- build_living_expenses_comparison: added Avg Monthly column to by_group table
+- make_living_expenses_monthly_chart: rewritten to stacked bars by category_group
+  (largest group first = bottom of stack); cumulative mode unchanged
+
+data_helpers.py — Health Care (new)
+- HC_TARGET_ROW = "Health Care Target"; HC_GROUP = "Basic Expenses - Health Care"
+- load_hc_target / save_hc_target: same pattern as LE target helpers
+- build_health_care_comparison: total vs. prorated target, by_category table with
+  Actual and Avg Monthly columns
+- make_health_care_monthly_chart: stacked bars by category_name + target line,
+  cumulative toggle; same stacking convention as LE chart
+
+financial_dashboard.py — Actual vs. Plan page restructure
+- Tab order: Comparison Table | Goals (was "Monthly Chart") | Health Care (new) |
+  Living Expenses | Edit Plan Amounts
+- Comparison Table: added Health Care row and Living Expenses row; all rows sorted
+  alphabetically by Goal name
+- Living Expenses tab: removed Monthly Target number_input (moved to Edit Plan
+  Amounts); chart now appears near top; added Month-to-Month Trend by Category
+  Group table; added Transactions section with Category + Payee dropdowns
+- Health Care tab (new): metrics, stacked monthly chart, Spending by Category
+  table, trend analysis table, transaction drill-down — consistent with LE tab
+- Edit Plan Amounts: LE and HC monthly targets shown side-by-side at top, each
+  with narrow input + Save button on same line; save now calls st.rerun() so
+  other tabs immediately reflect the new value (session_state flag preserves the
+  success message across the rerun); Goal plan amounts table excludes both target
+  rows; save logic uses goal-name lookup instead of positional index
+
+email_poller.py — Bug fixes
+- _extract_forwarded_from: switched from re.search to re.findall and returns
+  matches[-1] (deepest original sender); fixes double-forward chains where a
+  spouse forwards a vendor email and the user re-forwards to k2udal
+- fetch_ynab_emails: changed imap.fetch from "(RFC822)" to "(BODY.PEEK[])" so
+  Gmail does not implicitly set \Seen on fetched messages
+- Emails that are skipped (no rule match, Claude returns nothing, exception) are
+  left unread; mark_emails_read() called only for successfully inserted emails
+- mark_emails_read(msg_ids): new helper that opens a second IMAP connection to
+  mark only successfully processed message IDs as \Seen
+
+phase2_sources.json
+- Five Star Veterinary: corrected "category" key to "default_category" so the
+  pet category override is actually applied by build_pending_records
+
+Architecture notes
+- Stacked bar charts (LE, HC): traces added largest-first so the largest category
+  occupies the bottom of the stack, smallest is at the top
+- Edit Plan Amounts saves: st.rerun() + session_state flag pattern ensures all
+  tabs re-read rc_goals from disk before rendering; flag is pop()'d on next pass
+  so the success message appears exactly once
+- right_capital_goals.xlsx now has three special rows that are excluded from the
+  Goal Plan Amounts editor: Living Expenses Target, Health Care Target, and any
+  future target rows added via _target_rows set
+
+Next logical steps
+- Five Star Vet invoices arrive as PDF attachments — body is empty so Claude
+  cannot extract amounts; use Phase 1 manual entry for these
+- Health Care and Living Expenses monthly targets default to 0 / 8000 until set
+  via Edit Plan Amounts
 - Inline log output from "Check for New Transactions" button (currently terminal-only)

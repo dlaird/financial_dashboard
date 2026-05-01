@@ -71,18 +71,19 @@ def _match_sender_rule(original_from: str, rules: list[dict]) -> dict | None:
 
 def _extract_forwarded_from(body: str) -> str:
     """
-    Extract the original sender line from a Gmail forwarded message block.
-    Gmail format: '---------- Forwarded message ---------\nFrom: Name <addr@domain.com>'
-    The From line may wrap across two lines when the address is long.
+    Extract the original (deepest) sender from a forwarded message chain.
+
+    Handles double-forwards (e.g. vet → wife → you): scans for ALL
+    'Forwarded message' blocks and returns the From line of the last one,
+    which is the furthest-upstream original sender.
     """
-    match = re.search(
+    matches = re.findall(
         r"[-]{5,}\s*Forwarded message\s*[-]{5,}.*?From:\s*(.+?)(?=\n\S|\Z)",
         body,
         re.IGNORECASE | re.DOTALL,
     )
-    if match:
-        # Collapse any line wrapping inside the From value
-        return " ".join(match.group(1).split())
+    if matches:
+        return " ".join(matches[-1].split())
     return ""
 
 
@@ -156,9 +157,7 @@ def _get_body(msg) -> str:
 def fetch_ynab_emails() -> list[dict]:
     """
     Connect to Gmail via IMAP and fetch all unread emails from trusted forwarders.
-    Phase 1 emails have SUBJECT_TRIGGER in the subject.
-    Phase 2 emails are forwarded bills/receipts from any trusted forwarder address.
-    All fetched emails are marked as read.
+    Emails are NOT marked as read here — call mark_emails_read() after processing.
     """
     gmail_user = os.getenv("GMAIL_ADDRESS")
     gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
@@ -180,7 +179,7 @@ def fetch_ynab_emails() -> list[dict]:
         log.info(f"Found {len(ids)} unread email(s) since {since_str}.")
 
         for msg_id in ids:
-            _, data = imap.fetch(msg_id, "(RFC822)")
+            _, data = imap.fetch(msg_id, "(BODY.PEEK[])")
             raw = data[0][1]
             msg = email.message_from_bytes(raw)
 
@@ -188,7 +187,6 @@ def fetch_ynab_emails() -> list[dict]:
             from_addr = re.search(r"[\w.\-+]+@[\w.\-]+", from_raw)
             from_addr = from_addr.group(0).lower() if from_addr else ""
 
-            # Only process emails from trusted forwarders
             if from_addr not in trusted:
                 log.info(f"Skipping email from untrusted sender: {from_addr!r}")
                 continue
@@ -205,10 +203,21 @@ def fetch_ynab_emails() -> list[dict]:
                 "msg_id": msg_id,
             })
 
-            imap.store(msg_id, "+FLAGS", "\\Seen")
-
     log.info(f"Processing {len(results)} email(s) from trusted forwarders.")
     return results
+
+
+def mark_emails_read(msg_ids: list) -> None:
+    """Mark a list of IMAP message IDs as read (\\Seen)."""
+    if not msg_ids:
+        return
+    gmail_user = os.getenv("GMAIL_ADDRESS")
+    gmail_pass = os.getenv("GMAIL_APP_PASSWORD")
+    with imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT) as imap:
+        imap.login(gmail_user, gmail_pass)
+        imap.select("INBOX")
+        for msg_id in msg_ids:
+            imap.store(msg_id, "+FLAGS", "\\Seen")
 
 
 # ---------------------------------------------------------------------------
@@ -349,11 +358,14 @@ def run():
     sender_rules = sources.get("sender_rules", [])
 
     inserted = 0
+    read_ids = []   # msg_ids to mark read — only on successful insert
+
     for em in emails:
         subject = em["raw_subject"]
         body = em["raw_body"]
         received = em["received_at"]
         from_addr = em["from_addr"]
+        msg_id = em["msg_id"]
 
         try:
             if SUBJECT_TRIGGER in subject.lower():
@@ -362,6 +374,7 @@ def run():
                 tx_id = pending_db.insert_pending(record)
                 _log_inserted(record, tx_id)
                 inserted += 1
+                read_ids.append(msg_id)
 
             else:
                 # ── Phase 2: forwarded bill / receipt ─────────────────────────
@@ -370,7 +383,10 @@ def run():
                 forwarded_from = _extract_forwarded_from(body)
                 rule = _match_sender_rule(forwarded_from, sender_rules)
                 if not rule:
-                    log.info(f"No sender rule for forwarded-from '{forwarded_from}' — skipping.")
+                    log.info(
+                        f"No sender rule for forwarded-from '{forwarded_from}' — "
+                        f"leaving unread."
+                    )
                     continue
 
                 forwarder_prefix = trusted_forwarders.get(from_addr, "?")
@@ -379,7 +395,7 @@ def run():
                 log.info(f"Phase 2: extracting from '{payee_hint}' email forwarded by {from_addr}.")
                 extracted = p2.extract_transactions(body, payee_hint=payee_hint)
                 if not extracted:
-                    log.warning(f"Claude returned no transactions for subject: '{subject}'")
+                    log.warning(f"Claude returned no transactions for subject: '{subject}' — leaving unread.")
                     continue
 
                 records = p2.build_pending_records(
@@ -394,10 +410,13 @@ def run():
                     tx_id = pending_db.insert_pending(record)
                     _log_inserted(record, tx_id)
                     inserted += 1
+                if records:
+                    read_ids.append(msg_id)
 
         except Exception as e:
             log.error(f"Failed to process email '{subject}': {e}", exc_info=True)
 
+    mark_emails_read(read_ids)
     log.info(f"Done. {inserted} transaction(s) queued.")
 
 
